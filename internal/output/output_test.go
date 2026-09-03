@@ -45,6 +45,16 @@ func TestErrorEnvelope(t *testing.T) {
 	if env.Data != nil {
 		t.Fatal("expected data=nil")
 	}
+
+	b, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	json.Unmarshal(b, &raw)
+	if raw["data"] != nil {
+		t.Fatal("expected null data in JSON")
+	}
 }
 
 func TestErrorCodes(t *testing.T) {
