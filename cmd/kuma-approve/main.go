@@ -17,6 +17,8 @@ import (
 	"github.com/jhyoong/KumaApprove/internal/service"
 	"github.com/jhyoong/KumaApprove/internal/service/gcal"
 	"github.com/jhyoong/KumaApprove/internal/service/gmail"
+	msftcal "github.com/jhyoong/KumaApprove/internal/service/msft-cal"
+	"github.com/jhyoong/KumaApprove/internal/service/outlook"
 	"github.com/jhyoong/KumaApprove/internal/setup"
 )
 
@@ -104,6 +106,17 @@ func main() {
 		Store:        store,
 	}
 
+	// Create Microsoft auth provider (if configured).
+	var msauth *auth.MicrosoftAuth
+	if cfg.MicrosoftOAuth.ClientID != "" {
+		msauth = &auth.MicrosoftAuth{
+			ClientID:     cfg.MicrosoftOAuth.ClientID,
+			ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
+			TenantID:     cfg.MicrosoftOAuth.TenantID,
+			Store:        store,
+		}
+	}
+
 	// Resolve account.
 	account := resolveAccount(args, cfg, serviceName, actionName)
 
@@ -111,6 +124,10 @@ func main() {
 	registry := service.NewRegistry()
 	registry.Register(gmail.New(gauth, account))
 	registry.Register(gcal.New(gauth, account))
+	if msauth != nil {
+		registry.Register(outlook.New(msauth, account))
+		registry.Register(msftcal.New(msauth, account))
+	}
 
 	// Register executor service.
 	execSafeList := make(map[string]string, len(cfg.Exec.SafeList))
@@ -215,7 +232,61 @@ func runAuth(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: kuma-approve auth <service> <account>")
 		os.Exit(1)
 	}
-	setup.RunAuth(args[0], args[1])
+	serviceName := args[0]
+	account := args[1]
+
+	cfg, err := config.Load(config.DefaultPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	machineID, err := credstore.GetMachineID()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get machine ID: %v\n", err)
+		os.Exit(1)
+	}
+
+	encKey, err := credstore.DeriveKey(machineID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to derive key: %v\n", err)
+		os.Exit(1)
+	}
+
+	storePath := filepath.Join(config.Dir(), "credentials.enc")
+	store, err := credstore.NewStore(storePath, encKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open credential store: %v\n", err)
+		os.Exit(1)
+	}
+
+	switch serviceName {
+	case "outlook", "msft-cal":
+		msauth := &auth.MicrosoftAuth{
+			ClientID:     cfg.MicrosoftOAuth.ClientID,
+			ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
+			TenantID:     cfg.MicrosoftOAuth.TenantID,
+			Store:        store,
+		}
+		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
+		if err := msauth.RunOAuthFlow(serviceName, account); err != nil {
+			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		gauth := &auth.GoogleAuth{
+			ClientID:     cfg.GoogleOAuth.ClientID,
+			ClientSecret: cfg.GoogleOAuth.ClientSecret,
+			Store:        store,
+		}
+		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
+		if err := gauth.RunOAuthFlow(serviceName, account); err != nil {
+			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("Authorization for %s:%s complete.\n", serviceName, account)
 }
 
 func parseFlags(raw []string) map[string]string {
@@ -240,6 +311,8 @@ func printUsage() {
 Services:
   gmail       Gmail operations
   gcal        Google Calendar operations
+  outlook     Outlook email operations
+  msft-cal    Microsoft Calendar operations
   exec        Shell command execution
   config      View/edit configuration
   auth        Manage OAuth authentication
