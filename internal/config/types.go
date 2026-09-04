@@ -6,8 +6,9 @@ type Config struct {
 	Telegram    TelegramConfig      `json:"telegram"`
 	Approval    ApprovalConfig      `json:"approval"`
 	Exec        ExecConfig          `json:"exec"`
-	GoogleOAuth GoogleOAuthConfig   `json:"google_oauth"`
-	Accounts    map[string][]string `json:"accounts"`
+	GoogleOAuth    GoogleOAuthConfig    `json:"google_oauth"`
+	MicrosoftOAuth MicrosoftOAuthConfig `json:"microsoft_oauth"`
+	Accounts       map[string][]string  `json:"accounts"`
 }
 
 // TelegramConfig holds Telegram bot credentials.
@@ -35,4 +36,11 @@ type ExecConfig struct {
 type GoogleOAuthConfig struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
+}
+
+// MicrosoftOAuthConfig holds Microsoft/Azure AD OAuth client credentials.
+type MicrosoftOAuthConfig struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	TenantID     string `json:"tenant_id"`
 }
