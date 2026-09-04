@@ -15,6 +15,38 @@ import (
 	"github.com/jhyoong/KumaApprove/internal/credstore"
 )
 
+type sectionStatus struct {
+	configured bool
+	valid      bool
+	reason     string
+	detail     string
+}
+
+func validateTelegramBot(botToken, apiBase string) error {
+	if apiBase == "" {
+		apiBase = "https://api.telegram.org"
+	}
+	url := fmt.Sprintf("%s/bot%s/getMe", apiBase, botToken)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("connecting to Telegram API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("parsing Telegram response: %w", err)
+	}
+	if !result.OK {
+		return fmt.Errorf("bot token invalid: %s", result.Description)
+	}
+	return nil
+}
+
 // readLine prints the prompt to stdout, reads one line from reader,
 // trims whitespace, and returns the result.
 func readLine(reader *bufio.Reader, prompt string) string {
