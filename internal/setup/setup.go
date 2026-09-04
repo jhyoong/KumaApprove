@@ -47,6 +47,17 @@ func validateTelegramBot(botToken, apiBase string) error {
 	return nil
 }
 
+func validateTelegram(cfg config.Config, apiBase string) sectionStatus {
+	if cfg.Telegram.BotToken == "" {
+		return sectionStatus{configured: false}
+	}
+	detail := "chat ID: " + cfg.Telegram.ChatID
+	if err := validateTelegramBot(cfg.Telegram.BotToken, apiBase); err != nil {
+		return sectionStatus{configured: true, valid: false, reason: err.Error(), detail: detail}
+	}
+	return sectionStatus{configured: true, valid: true, detail: detail}
+}
+
 // readLine prints the prompt to stdout, reads one line from reader,
 // trims whitespace, and returns the result.
 func readLine(reader *bufio.Reader, prompt string) string {
