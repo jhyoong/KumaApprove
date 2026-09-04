@@ -105,11 +105,11 @@ func (o *OutlookService) Execute(action string, args map[string]string) (*servic
 	case "search":
 		return o.search(args)
 	case "send":
-		return nil, fmt.Errorf("not implemented")
+		return o.send(args)
 	case "reply":
-		return nil, fmt.Errorf("not implemented")
+		return o.reply(args)
 	case "draft":
-		return nil, fmt.Errorf("not implemented")
+		return o.draft(args)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
