@@ -119,6 +119,55 @@ func Run() {
 		os.Exit(1)
 	}
 
+	fmt.Println()
+	msSetup := readLine(reader, "Configure Microsoft Outlook/Calendar? (y/n): ")
+	if strings.ToLower(msSetup) == "y" {
+		msClientID := readLine(reader, "Microsoft Azure AD client ID: ")
+		msClientSecret := readLine(reader, "Microsoft Azure AD client secret: ")
+		msTenantID := readLine(reader, "Microsoft tenant ID (press Enter for 'consumers'): ")
+		if msTenantID == "" {
+			msTenantID = "consumers"
+		}
+
+		cfg.MicrosoftOAuth = config.MicrosoftOAuthConfig{
+			ClientID:     msClientID,
+			ClientSecret: msClientSecret,
+			TenantID:     msTenantID,
+		}
+
+		msAccount := readLine(reader, "Microsoft account email: ")
+
+		cfg.Accounts["outlook"] = []string{msAccount}
+		cfg.Accounts["msft-cal"] = []string{msAccount}
+
+		if err := config.Save(cfg, config.DefaultPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+			os.Exit(1)
+		}
+
+		msauth := &auth.MicrosoftAuth{
+			ClientID:     msClientID,
+			ClientSecret: msClientSecret,
+			TenantID:     msTenantID,
+			Store:        store,
+		}
+
+		fmt.Println()
+		fmt.Println("Authorizing Outlook...")
+		if err := msauth.RunOAuthFlow("outlook", msAccount); err != nil {
+			fmt.Fprintf(os.Stderr, "Outlook OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Authorizing Microsoft Calendar...")
+		if err := msauth.RunOAuthFlow("msft-cal", msAccount); err != nil {
+			fmt.Fprintf(os.Stderr, "Microsoft Calendar OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Microsoft services configured.")
+	}
+
 	// Send test Telegram message.
 	if err := sendTestMessage(botToken, chatID); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to send test message: %v\n", err)
@@ -156,16 +205,30 @@ func RunAuth(serviceName, account string) {
 		os.Exit(1)
 	}
 
-	gauth := &auth.GoogleAuth{
-		ClientID:     cfg.GoogleOAuth.ClientID,
-		ClientSecret: cfg.GoogleOAuth.ClientSecret,
-		Store:        store,
-	}
-
-	fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
-	if err := gauth.RunOAuthFlow(serviceName, account); err != nil {
-		fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
-		os.Exit(1)
+	switch serviceName {
+	case "outlook", "msft-cal":
+		msauth := &auth.MicrosoftAuth{
+			ClientID:     cfg.MicrosoftOAuth.ClientID,
+			ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
+			TenantID:     cfg.MicrosoftOAuth.TenantID,
+			Store:        store,
+		}
+		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
+		if err := msauth.RunOAuthFlow(serviceName, account); err != nil {
+			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		gauth := &auth.GoogleAuth{
+			ClientID:     cfg.GoogleOAuth.ClientID,
+			ClientSecret: cfg.GoogleOAuth.ClientSecret,
+			Store:        store,
+		}
+		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
+		if err := gauth.RunOAuthFlow(serviceName, account); err != nil {
+			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Printf("Authorization for %s:%s complete.\n", serviceName, account)
