@@ -95,6 +95,10 @@ func (c *CalendarService) updateEvent(args map[string]string) (*service.Result, 
 		body["location"] = loc
 	}
 
+	if len(body) == 0 {
+		return nil, fmt.Errorf("update requires at least one field to change")
+	}
+
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("encoding request body: %w", err)

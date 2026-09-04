@@ -73,7 +73,7 @@ func TestCreateEvent(t *testing.T) {
 	}
 }
 
-func TestCreateMissingTitle(t *testing.T) {
+func TestCreateMissingSummary(t *testing.T) {
 	svc := newTestService("http://unused")
 
 	_, err := svc.Execute("create", map[string]string{
