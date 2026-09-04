@@ -3,10 +3,20 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/jhyoong/KumaApprove/internal/approval"
+	"github.com/jhyoong/KumaApprove/internal/audit"
+	"github.com/jhyoong/KumaApprove/internal/auth"
 	"github.com/jhyoong/KumaApprove/internal/cli"
+	"github.com/jhyoong/KumaApprove/internal/config"
+	"github.com/jhyoong/KumaApprove/internal/credstore"
+	"github.com/jhyoong/KumaApprove/internal/executor"
 	"github.com/jhyoong/KumaApprove/internal/output"
+	"github.com/jhyoong/KumaApprove/internal/service"
+	"github.com/jhyoong/KumaApprove/internal/service/gcal"
+	"github.com/jhyoong/KumaApprove/internal/service/gmail"
 )
 
 func main() {
@@ -15,35 +25,189 @@ func main() {
 		os.Exit(1)
 	}
 
-	service := os.Args[1]
+	command := os.Args[1]
 
-	if service == "help" || service == "--help" || service == "-h" {
+	if command == "help" || command == "--help" || command == "-h" {
 		printUsage()
 		return
 	}
 
+	if command == "setup" {
+		runSetup()
+		return
+	}
+
+	if command == "auth" {
+		runAuth(os.Args[2:])
+		return
+	}
+
+	serviceName := command
+
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: kuma-approve %s <action> [flags]\n", service)
+		fmt.Fprintf(os.Stderr, "usage: kuma-approve %s <action> [flags]\n", serviceName)
 		os.Exit(1)
 	}
 
-	action := os.Args[2]
+	actionName := os.Args[2]
 	args := parseFlags(os.Args[3:])
 
-	router := cli.NewRouter()
-	// Services will be registered here as they are implemented
-
-	result, err := router.Dispatch(service, action, args)
+	// Load config.
+	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		output.PrintAndExit(output.Fail(
-			service+":"+action,
-			"INVALID_ARGS",
+			serviceName+":"+actionName,
+			"CONFIG_ERROR",
+			fmt.Sprintf("failed to load config: %v", err),
+		))
+		return
+	}
+
+	// Get machine ID and derive encryption key.
+	machineID, err := credstore.GetMachineID()
+	if err != nil {
+		output.PrintAndExit(output.Fail(
+			serviceName+":"+actionName,
+			"MACHINE_ID_ERROR",
+			fmt.Sprintf("failed to get machine ID: %v", err),
+		))
+		return
+	}
+
+	encKey, err := credstore.DeriveKey(machineID)
+	if err != nil {
+		output.PrintAndExit(output.Fail(
+			serviceName+":"+actionName,
+			"KEY_ERROR",
+			fmt.Sprintf("failed to derive key: %v", err),
+		))
+		return
+	}
+
+	// Open credential store.
+	storePath := filepath.Join(config.Dir(), "credentials.enc")
+	store, err := credstore.NewStore(storePath, encKey)
+	if err != nil {
+		output.PrintAndExit(output.Fail(
+			serviceName+":"+actionName,
+			"CREDSTORE_ERROR",
+			fmt.Sprintf("failed to open credential store: %v", err),
+		))
+		return
+	}
+
+	// Create Google auth provider.
+	gauth := &auth.GoogleAuth{
+		ClientID:     cfg.GoogleOAuth.ClientID,
+		ClientSecret: cfg.GoogleOAuth.ClientSecret,
+		Store:        store,
+	}
+
+	// Resolve account.
+	account := resolveAccount(args, cfg, serviceName, actionName)
+
+	// Create service registry.
+	registry := service.NewRegistry()
+	registry.Register(gmail.New(gauth, account))
+	registry.Register(gcal.New(gauth, account))
+
+	// Register executor service.
+	execSafeList := make(map[string]string, len(cfg.Exec.SafeList))
+	for _, cmd := range cfg.Exec.SafeList {
+		execSafeList[cmd] = approval.TierAuto
+	}
+	execSvc, err := executor.New(executor.ExecConfig{
+		WorkingDirectory: cfg.Exec.WorkingDirectory,
+		TimeoutSeconds:   cfg.Exec.TimeoutSeconds,
+		MaxOutputBytes:   cfg.Exec.MaxOutputBytes,
+		SafeList:         execSafeList,
+		DenyListPatterns: cfg.Exec.DenyListPatterns,
+	})
+	if err != nil {
+		output.PrintAndExit(output.Fail(
+			serviceName+":"+actionName,
+			"EXEC_INIT_ERROR",
+			fmt.Sprintf("failed to initialize executor: %v", err),
+		))
+		return
+	}
+	registry.Register(execSvc)
+
+	// Create Telegram approver if configured.
+	var approver approval.Approver
+	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+		approver = approval.NewTelegramApprover(approval.TelegramConfig{
+			BotToken: cfg.Telegram.BotToken,
+			ChatID:   cfg.Telegram.ChatID,
+		})
+	}
+
+	// Create audit logger.
+	auditPath := filepath.Join(config.Dir(), "audit.log")
+	logger, err := audit.NewLogger(auditPath)
+	if err != nil {
+		output.PrintAndExit(output.Fail(
+			serviceName+":"+actionName,
+			"AUDIT_ERROR",
+			fmt.Sprintf("failed to create audit logger: %v", err),
+		))
+		return
+	}
+
+	// Create router and dispatch.
+	router := cli.NewRouter(cli.RouterConfig{
+		Registry:       registry,
+		Approver:       approver,
+		TierOverrides:  cfg.Approval.Tiers,
+		Logger:         logger,
+		TimeoutMinutes: cfg.Approval.TimeoutMinutes,
+	})
+
+	result, err := router.Dispatch(serviceName, actionName, account, args)
+	if err != nil {
+		output.PrintAndExit(output.Fail(
+			serviceName+":"+actionName,
+			"DISPATCH_ERROR",
 			err.Error(),
 		))
 		return
 	}
 
-	output.PrintAndExit(output.Success(service+":"+action, result))
+	output.PrintAndExit(output.Success(serviceName+":"+actionName, result))
+}
+
+// resolveAccount determines the account to use. It checks the --account flag
+// first, then falls back to the single configured account if there is exactly one.
+func resolveAccount(args map[string]string, cfg config.Config, serviceName, actionName string) string {
+	if acct, ok := args["account"]; ok {
+		delete(args, "account")
+		return acct
+	}
+
+	if len(cfg.Accounts) == 1 {
+		for _, accounts := range cfg.Accounts {
+			if len(accounts) > 0 {
+				return accounts[0]
+			}
+		}
+	}
+
+	output.PrintAndExit(output.Fail(
+		serviceName+":"+actionName,
+		"NO_ACCOUNT",
+		"no account specified; use --account or configure a single account",
+	))
+	return "" // unreachable
+}
+
+func runSetup() {
+	fmt.Fprintln(os.Stderr, "setup wizard not yet implemented")
+	os.Exit(1)
+}
+
+func runAuth(args []string) {
+	fmt.Fprintln(os.Stderr, "auth command not yet implemented")
+	os.Exit(1)
 }
 
 func parseFlags(raw []string) map[string]string {

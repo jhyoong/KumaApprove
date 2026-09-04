@@ -1,36 +1,43 @@
 package cli
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
 type fakeService struct {
 	name    string
-	actions map[string]bool
+	actions []service.ActionDefinition
 	called  string
 	args    map[string]string
 }
 
-func (f *fakeService) Name() string { return f.name }
-func (f *fakeService) Execute(action string, args map[string]string) (any, error) {
+func (f *fakeService) Name() string                    { return f.name }
+func (f *fakeService) Actions() []service.ActionDefinition { return f.actions }
+func (f *fakeService) Execute(action string, args map[string]string) (*service.Result, error) {
 	f.called = action
 	f.args = args
-	return map[string]string{"status": "ok"}, nil
-}
-func (f *fakeService) HasAction(action string) bool {
-	return f.actions[action]
+	return &service.Result{Data: map[string]string{"status": "ok"}}, nil
 }
 
 func TestRouterDispatch(t *testing.T) {
 	svc := &fakeService{
-		name:    "gmail",
-		actions: map[string]bool{"list": true, "send": true},
+		name: "gmail",
+		actions: []service.ActionDefinition{
+			{Name: "list", DefaultTier: "auto", Description: "List messages"},
+		},
 	}
 
-	r := NewRouter()
-	r.Register(svc)
+	reg := service.NewRegistry()
+	reg.Register(svc)
 
-	result, err := r.Dispatch("gmail", "list", map[string]string{"limit": "20"})
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+	})
+
+	result, err := r.Dispatch("gmail", "list", "user@example.com", map[string]string{"limit": "20"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,34 +50,38 @@ func TestRouterDispatch(t *testing.T) {
 }
 
 func TestRouterUnknownService(t *testing.T) {
-	r := NewRouter()
-	_, err := r.Dispatch("unknown", "list", nil)
+	reg := service.NewRegistry()
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+	})
+
+	_, err := r.Dispatch("unknown", "list", "user@example.com", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown service")
 	}
 }
 
-func TestRouterUnknownAction(t *testing.T) {
+func TestRouterDenyTier(t *testing.T) {
 	svc := &fakeService{
-		name:    "gmail",
-		actions: map[string]bool{"list": true},
+		name: "gmail",
+		actions: []service.ActionDefinition{
+			{Name: "list", DefaultTier: "auto", Description: "List messages"},
+		},
 	}
-	r := NewRouter()
-	r.Register(svc)
 
-	_, err := r.Dispatch("gmail", "unknown", nil)
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	r := NewRouter(RouterConfig{
+		Registry:      reg,
+		TierOverrides: map[string]string{"gmail:list": "deny"},
+	})
+
+	_, err := r.Dispatch("gmail", "list", "user@example.com", nil)
 	if err == nil {
-		t.Fatal("expected error for unknown action")
+		t.Fatal("expected error for denied action")
 	}
-}
-
-func TestRouterListServices(t *testing.T) {
-	r := NewRouter()
-	r.Register(&fakeService{name: "gmail", actions: map[string]bool{"list": true}})
-	r.Register(&fakeService{name: "gcal", actions: map[string]bool{"list": true}})
-
-	names := r.ServiceNames()
-	if len(names) != 2 {
-		t.Fatalf("expected 2 services, got %d", len(names))
+	if !strings.Contains(err.Error(), "denied by policy") {
+		t.Fatalf("expected 'denied by policy' in error, got: %s", err.Error())
 	}
 }
