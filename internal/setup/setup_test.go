@@ -215,3 +215,73 @@ func TestValidateGoogleNoCredentials(t *testing.T) {
 		t.Fatal("expected invalid when no credentials in store")
 	}
 }
+
+func TestValidateMicrosoftNotConfigured(t *testing.T) {
+	cfg := config.Config{}
+	store := newFakeStore()
+	status := validateMicrosoft(cfg, store, "")
+	if status.configured {
+		t.Fatal("expected not configured")
+	}
+}
+
+func TestValidateMicrosoftValid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "new-token",
+			"refresh_token": "new-refresh",
+			"expires_in":    3600,
+		})
+	}))
+	defer server.Close()
+
+	store := newFakeStore()
+	store.Put("outlook:user@outlook.com", credstore.Credential{
+		AccessToken:  "old-token",
+		RefreshToken: "refresh-123",
+		Expiry:       time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+	})
+	store.Put("msft-cal:user@outlook.com", credstore.Credential{
+		AccessToken:  "old-token",
+		RefreshToken: "refresh-456",
+		Expiry:       time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+	})
+
+	cfg := config.Config{
+		MicrosoftOAuth: config.MicrosoftOAuthConfig{ClientID: "cid", ClientSecret: "csec", TenantID: "consumers"},
+		Accounts:       map[string][]string{"outlook": {"user@outlook.com"}, "msft-cal": {"user@outlook.com"}},
+	}
+	status := validateMicrosoft(cfg, store, server.URL)
+	if !status.configured || !status.valid {
+		t.Fatalf("expected configured+valid, got configured=%v valid=%v reason=%s", status.configured, status.valid, status.reason)
+	}
+}
+
+func TestValidateMicrosoftExpiredToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":             "invalid_grant",
+			"error_description": "token revoked",
+		})
+	}))
+	defer server.Close()
+
+	store := newFakeStore()
+	store.Put("outlook:user@outlook.com", credstore.Credential{
+		AccessToken:  "old-token",
+		RefreshToken: "bad-refresh",
+		Expiry:       time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+	})
+
+	cfg := config.Config{
+		MicrosoftOAuth: config.MicrosoftOAuthConfig{ClientID: "cid", ClientSecret: "csec", TenantID: "consumers"},
+		Accounts:       map[string][]string{"outlook": {"user@outlook.com"}},
+	}
+	status := validateMicrosoft(cfg, store, server.URL)
+	if !status.configured {
+		t.Fatal("expected configured")
+	}
+	if status.valid {
+		t.Fatal("expected invalid")
+	}
+}

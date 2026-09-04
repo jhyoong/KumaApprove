@@ -98,6 +98,47 @@ func validateGoogle(cfg config.Config, store auth.CredentialStore, tokenURL stri
 	return sectionStatus{configured: true, valid: true, detail: detail}
 }
 
+func validateMicrosoft(cfg config.Config, store auth.CredentialStore, tokenURL string) sectionStatus {
+	if cfg.MicrosoftOAuth.ClientID == "" {
+		return sectionStatus{configured: false}
+	}
+
+	outlookAccounts := cfg.Accounts["outlook"]
+	msftCalAccounts := cfg.Accounts["msft-cal"]
+	if len(outlookAccounts) == 0 && len(msftCalAccounts) == 0 {
+		return sectionStatus{configured: false}
+	}
+
+	msauth := &auth.MicrosoftAuth{
+		ClientID:     cfg.MicrosoftOAuth.ClientID,
+		ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
+		TenantID:     cfg.MicrosoftOAuth.TenantID,
+		TokenURL:     tokenURL,
+		Store:        store,
+	}
+
+	var account string
+	if len(outlookAccounts) > 0 {
+		account = outlookAccounts[0]
+	} else {
+		account = msftCalAccounts[0]
+	}
+	detail := "account: " + account
+
+	for _, acct := range outlookAccounts {
+		if _, err := msauth.GetToken("outlook", acct); err != nil {
+			return sectionStatus{configured: true, valid: false, reason: fmt.Sprintf("Outlook token invalid for %s: %v", acct, err), detail: detail}
+		}
+	}
+	for _, acct := range msftCalAccounts {
+		if _, err := msauth.GetToken("msft-cal", acct); err != nil {
+			return sectionStatus{configured: true, valid: false, reason: fmt.Sprintf("msft-cal token invalid for %s: %v", acct, err), detail: detail}
+		}
+	}
+
+	return sectionStatus{configured: true, valid: true, detail: detail}
+}
+
 // readLine prints the prompt to stdout, reads one line from reader,
 // trims whitespace, and returns the result.
 func readLine(reader *bufio.Reader, prompt string) string {
