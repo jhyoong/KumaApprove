@@ -104,6 +104,12 @@ func (g *GmailService) Execute(action string, args map[string]string) (*service.
 		return g.get(args)
 	case "search":
 		return g.search(args)
+	case "send":
+		return g.send(args)
+	case "reply":
+		return g.reply(args)
+	case "draft":
+		return g.draft(args)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
