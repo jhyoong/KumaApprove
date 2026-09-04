@@ -34,6 +34,10 @@ func validateTelegramBot(botToken, apiBase string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Telegram API returned status %d", resp.StatusCode)
+	}
+
 	var result struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
