@@ -163,8 +163,8 @@ func TestListDefaultsToToday(t *testing.T) {
 		if timeMax == "" {
 			t.Error("expected timeMax to be set when no date provided")
 		}
-		if !strings.Contains(timeMax, "T23:59:59") {
-			t.Errorf("expected timeMax to end at 23:59:59, got %s", timeMax)
+		if !strings.Contains(timeMax, "T00:00:00") {
+			t.Errorf("expected timeMax to be next-day midnight, got %s", timeMax)
 		}
 
 		json.NewEncoder(w).Encode(map[string]any{
@@ -191,5 +191,16 @@ func TestGetMissingEventID(t *testing.T) {
 	}
 	if err.Error() != "missing required parameter: event-id" {
 		t.Errorf("unexpected error message: %s", err.Error())
+	}
+}
+
+func TestUnknownAction(t *testing.T) {
+	svc := newTestService("http://unused")
+	_, err := svc.Execute("nonexistent", nil)
+	if err == nil {
+		t.Fatal("expected error for unknown action")
+	}
+	if !strings.Contains(err.Error(), "unknown action") {
+		t.Fatalf("expected 'unknown action' error, got: %s", err)
 	}
 }

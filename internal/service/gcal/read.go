@@ -63,7 +63,7 @@ type calendarEvent struct {
 	} `json:"attendees"`
 }
 
-// resolveStartEnd extracts the start or end time from the Calendar API response.
+// resolveTime extracts the start or end time from the Calendar API response.
 // The API returns either dateTime (timed events) or date (all-day events).
 func resolveTime(dt struct {
 	DateTime string `json:"dateTime"`
@@ -86,11 +86,11 @@ func (c *CalendarService) list(args map[string]string) (*service.Result, error) 
 			return nil, fmt.Errorf("invalid date format (expected YYYY-MM-DD): %w", err)
 		}
 		timeMin = d.Format("2006-01-02") + "T00:00:00Z"
-		timeMax = d.Format("2006-01-02") + "T23:59:59Z"
+		timeMax = d.AddDate(0, 0, 1).Format("2006-01-02") + "T00:00:00Z"
 	} else {
 		now := time.Now()
 		timeMin = now.Format("2006-01-02") + "T00:00:00Z"
-		timeMax = now.Format("2006-01-02") + "T23:59:59Z"
+		timeMax = now.AddDate(0, 0, 1).Format("2006-01-02") + "T00:00:00Z"
 	}
 
 	endpoint := fmt.Sprintf("%s/calendar/v3/calendars/primary/events", c.baseURL)
