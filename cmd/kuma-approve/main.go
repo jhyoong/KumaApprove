@@ -186,10 +186,8 @@ func resolveAccount(args map[string]string, cfg config.Config, serviceName, acti
 	}
 
 	if len(cfg.Accounts) == 1 {
-		for _, accounts := range cfg.Accounts {
-			if len(accounts) > 0 {
-				return accounts[0]
-			}
+		for email := range cfg.Accounts {
+			return email
 		}
 	}
 

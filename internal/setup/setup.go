@@ -19,7 +19,11 @@ import (
 // trims whitespace, and returns the result.
 func readLine(reader *bufio.Reader, prompt string) string {
 	fmt.Print(prompt)
-	line, _ := reader.ReadString('\n')
+	line, err := reader.ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		fmt.Fprintln(os.Stderr, "\nsetup cancelled")
+		os.Exit(1)
+	}
 	return strings.TrimSpace(line)
 }
 
@@ -177,9 +181,13 @@ func detectChatID(botToken string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Telegram API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
