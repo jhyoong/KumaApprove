@@ -17,6 +17,7 @@ import (
 	"github.com/jhyoong/KumaApprove/internal/service"
 	"github.com/jhyoong/KumaApprove/internal/service/gcal"
 	"github.com/jhyoong/KumaApprove/internal/service/gmail"
+	"github.com/jhyoong/KumaApprove/internal/setup"
 )
 
 func main() {
@@ -201,13 +202,15 @@ func resolveAccount(args map[string]string, cfg config.Config, serviceName, acti
 }
 
 func runSetup() {
-	fmt.Fprintln(os.Stderr, "setup wizard not yet implemented")
-	os.Exit(1)
+	setup.Run()
 }
 
 func runAuth(args []string) {
-	fmt.Fprintln(os.Stderr, "auth command not yet implemented")
-	os.Exit(1)
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: kuma-approve auth <service> <account>")
+		os.Exit(1)
+	}
+	setup.RunAuth(args[0], args[1])
 }
 
 func parseFlags(raw []string) map[string]string {
