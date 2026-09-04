@@ -31,7 +31,7 @@ func (g *GmailService) send(args map[string]string) (*service.Result, error) {
 	}
 	body := args["body"]
 	if body == "" {
-		return nil, fmt.Errorf("gmail send: --body is required")
+		return nil, fmt.Errorf("missing required parameter: body")
 	}
 
 	raw := buildRawEmail(to, subject, body, "", "")
@@ -74,6 +74,9 @@ func (g *GmailService) draft(args map[string]string) (*service.Result, error) {
 		return nil, fmt.Errorf("missing required parameter: subject")
 	}
 	body := args["body"]
+	if body == "" {
+		return nil, fmt.Errorf("missing required parameter: body")
+	}
 
 	raw := buildRawEmail(to, subject, body, "", "")
 	encoded := base64.RawURLEncoding.EncodeToString([]byte(raw))
@@ -207,12 +210,11 @@ func (g *GmailService) fetchOriginalForReply(id string) (originalMessage, error)
 		ThreadID: msg.ThreadID,
 	}
 	for _, h := range msg.Payload.Headers {
-		switch strings.ToLower(h.Name) {
-		case "from":
+		if strings.EqualFold(h.Name, "From") {
 			orig.From = h.Value
-		case "subject":
+		} else if strings.EqualFold(h.Name, "Subject") {
 			orig.Subject = h.Value
-		case "message-id":
+		} else if strings.EqualFold(h.Name, "Message-Id") {
 			orig.MessageID = h.Value
 		}
 	}
