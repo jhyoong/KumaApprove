@@ -68,7 +68,8 @@ func Run() {
 	// Google account.
 	account := readLine(reader, "Google account email: ")
 	cfg.Accounts = map[string][]string{
-		account: {"gmail", "gcal"},
+		"gmail": {account},
+		"gcal":  {account},
 	}
 
 	// Save config.

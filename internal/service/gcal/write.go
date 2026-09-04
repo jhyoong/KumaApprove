@@ -11,9 +11,9 @@ import (
 
 // createEvent creates a new calendar event. Requires summary, start, and end parameters.
 func (c *CalendarService) createEvent(args map[string]string) (*service.Result, error) {
-	summary := args["summary"]
+	summary := args["title"]
 	if summary == "" {
-		return nil, fmt.Errorf("missing required parameter: summary")
+		return nil, fmt.Errorf("missing required parameter: title")
 	}
 
 	start := args["start"]
@@ -79,8 +79,8 @@ func (c *CalendarService) updateEvent(args map[string]string) (*service.Result, 
 
 	body := map[string]any{}
 
-	if summary := args["summary"]; summary != "" {
-		body["summary"] = summary
+	if title := args["title"]; title != "" {
+		body["summary"] = title
 	}
 	if start := args["start"]; start != "" {
 		body["start"] = map[string]string{"dateTime": start}

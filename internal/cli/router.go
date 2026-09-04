@@ -2,18 +2,22 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jhyoong/KumaApprove/internal/approval"
 	"github.com/jhyoong/KumaApprove/internal/audit"
+	"github.com/jhyoong/KumaApprove/internal/auth"
+	"github.com/jhyoong/KumaApprove/internal/executor"
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
 // RouterConfig holds the dependencies for the approval-aware Router.
 type RouterConfig struct {
 	Registry       *service.Registry
-	Approver       approval.Approver // nil if no Telegram configured
+	Approver       approval.Approver  // nil if no Telegram configured
+	Notifier       approval.Notifier  // nil if no notification backend configured
 	TierOverrides  map[string]string
 	Logger         *audit.Logger // nil if audit logging disabled
 	TimeoutMinutes int
@@ -92,6 +96,24 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		if tier == approval.TierApprove {
 			status = "approved"
 		}
+
+		var authErr *auth.AuthExpiredError
+		if errors.As(err, &authErr) {
+			if r.config.Notifier != nil {
+				msg := fmt.Sprintf("Auth for %s:%s has expired. Run `kuma-approve auth %s %s` to re-authorize.",
+					authErr.Service, authErr.Account, authErr.Service, authErr.Account)
+				r.config.Notifier.SendMessage(msg)
+			}
+			r.logAction(actionKey, account, args, status, "failure", "AUTH_EXPIRED")
+			return nil, err
+		}
+
+		var timeoutErr *executor.TimeoutError
+		if errors.As(err, &timeoutErr) {
+			r.logAction(actionKey, account, args, status, "failure", "EXECUTION_TIMEOUT")
+			return nil, err
+		}
+
 		r.logAction(actionKey, account, args, status, "failure", "API_ERROR")
 		return nil, err
 	}

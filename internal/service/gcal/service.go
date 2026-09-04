@@ -59,7 +59,7 @@ func (c *CalendarService) Actions() []service.ActionDefinition {
 			DefaultTier: approval.TierApprove,
 			Description: "Create a new event",
 			Params: []service.ParamDef{
-				{Name: "summary", Required: true, Description: "Event title"},
+				{Name: "title", Required: true, Description: "Event title"},
 				{Name: "start", Required: true, Description: "Start time (RFC3339)"},
 				{Name: "end", Required: true, Description: "End time (RFC3339)"},
 				{Name: "description", Required: false, Description: "Event description"},
@@ -72,7 +72,7 @@ func (c *CalendarService) Actions() []service.ActionDefinition {
 			Description: "Update an existing event",
 			Params: []service.ParamDef{
 				{Name: "event-id", Required: true, Description: "Event ID"},
-				{Name: "summary", Required: false, Description: "Event title"},
+				{Name: "title", Required: false, Description: "Event title"},
 				{Name: "start", Required: false, Description: "Start time (RFC3339)"},
 				{Name: "end", Required: false, Description: "End time (RFC3339)"},
 				{Name: "description", Required: false, Description: "Event description"},

@@ -26,3 +26,8 @@ type ApprovalResult struct {
 type Approver interface {
 	RequestApproval(ctx context.Context, req ApprovalRequest) (ApprovalResult, error)
 }
+
+// Notifier sends plain text notifications (e.g. auth expiry alerts).
+type Notifier interface {
+	SendMessage(text string) error
+}

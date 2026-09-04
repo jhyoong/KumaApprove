@@ -22,6 +22,22 @@ type CredentialStore interface {
 	Put(key string, cred credstore.Credential) error
 }
 
+// AuthExpiredError indicates that a token refresh failed and the user
+// must re-authorize via the OAuth flow.
+type AuthExpiredError struct {
+	Service string
+	Account string
+	Err     error
+}
+
+func (e *AuthExpiredError) Error() string {
+	return fmt.Sprintf("auth expired for %s:%s: %v", e.Service, e.Account, e.Err)
+}
+
+func (e *AuthExpiredError) Unwrap() error {
+	return e.Err
+}
+
 // GoogleAuth handles Google OAuth2 token retrieval, refresh, and the
 // interactive browser-based authorization flow.
 type GoogleAuth struct {
@@ -59,7 +75,7 @@ func (g *GoogleAuth) GetToken(service, account string) (string, error) {
 
 	newToken, newExpiry, err := g.refreshToken(cred.RefreshToken)
 	if err != nil {
-		return "", fmt.Errorf("token refresh failed for %s: %w", key, err)
+		return "", &AuthExpiredError{Service: service, Account: account, Err: err}
 	}
 
 	cred.AccessToken = newToken

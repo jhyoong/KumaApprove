@@ -136,11 +136,14 @@ func main() {
 
 	// Create Telegram approver if configured.
 	var approver approval.Approver
+	var notifier approval.Notifier
 	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
-		approver = approval.NewTelegramApprover(approval.TelegramConfig{
+		tg := approval.NewTelegramApprover(approval.TelegramConfig{
 			BotToken: cfg.Telegram.BotToken,
 			ChatID:   cfg.Telegram.ChatID,
 		})
+		approver = tg
+		notifier = tg
 	}
 
 	// Create audit logger.
@@ -159,6 +162,7 @@ func main() {
 	router := cli.NewRouter(cli.RouterConfig{
 		Registry:       registry,
 		Approver:       approver,
+		Notifier:       notifier,
 		TierOverrides:  cfg.Approval.Tiers,
 		Logger:         logger,
 		TimeoutMinutes: cfg.Approval.TimeoutMinutes,
@@ -178,23 +182,26 @@ func main() {
 }
 
 // resolveAccount determines the account to use. It checks the --account flag
-// first, then falls back to the single configured account if there is exactly one.
+// first, then falls back to the single configured account for the service.
+// Returns empty string for services with no accounts (e.g. exec).
 func resolveAccount(args map[string]string, cfg config.Config, serviceName, actionName string) string {
 	if acct, ok := args["account"]; ok {
 		delete(args, "account")
 		return acct
 	}
 
-	if len(cfg.Accounts) == 1 {
-		for email := range cfg.Accounts {
-			return email
-		}
+	accounts := cfg.Accounts[serviceName]
+	if len(accounts) == 0 {
+		return ""
+	}
+	if len(accounts) == 1 {
+		return accounts[0]
 	}
 
 	output.PrintAndExit(output.Fail(
 		serviceName+":"+actionName,
 		"NO_ACCOUNT",
-		"no account specified; use --account or configure a single account",
+		fmt.Sprintf("multiple accounts for %s: %v; use --account to specify", serviceName, accounts),
 	))
 	return "" // unreachable
 }

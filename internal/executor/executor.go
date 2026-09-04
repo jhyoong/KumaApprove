@@ -89,6 +89,15 @@ type ExecConfig struct {
 	DenyListPatterns []string
 }
 
+// TimeoutError indicates that a command exceeded its allowed execution time.
+type TimeoutError struct {
+	TimeoutSeconds int
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("command timeout after %d seconds", e.TimeoutSeconds)
+}
+
 // ExecResult holds the output of a command execution.
 type ExecResult struct {
 	Stdout    string
@@ -209,7 +218,7 @@ func (e *ExecService) Execute(action string, args map[string]string) (*service.R
 	exitCode := 0
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("command timeout after %d seconds", e.config.TimeoutSeconds)
+			return nil, &TimeoutError{TimeoutSeconds: e.config.TimeoutSeconds}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()

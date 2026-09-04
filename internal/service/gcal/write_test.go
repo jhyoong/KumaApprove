@@ -52,9 +52,9 @@ func TestCreateEvent(t *testing.T) {
 
 	svc := newTestService(ts.URL)
 	result, err := svc.Execute("create", map[string]string{
-		"summary": "Team Planning",
-		"start":   "2024-03-01T10:00:00Z",
-		"end":     "2024-03-01T11:00:00Z",
+		"title": "Team Planning",
+		"start": "2024-03-01T10:00:00Z",
+		"end":   "2024-03-01T11:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -73,7 +73,7 @@ func TestCreateEvent(t *testing.T) {
 	}
 }
 
-func TestCreateMissingSummary(t *testing.T) {
+func TestCreateMissingTitle(t *testing.T) {
 	svc := newTestService("http://unused")
 
 	_, err := svc.Execute("create", map[string]string{
@@ -81,9 +81,9 @@ func TestCreateMissingSummary(t *testing.T) {
 		"end":   "2024-03-01T11:00:00Z",
 	})
 	if err == nil {
-		t.Fatal("expected error for missing summary")
+		t.Fatal("expected error for missing title")
 	}
-	if err.Error() != "missing required parameter: summary" {
+	if err.Error() != "missing required parameter: title" {
 		t.Errorf("unexpected error message: %s", err.Error())
 	}
 }
@@ -127,7 +127,7 @@ func TestUpdateEvent(t *testing.T) {
 	svc := newTestService(ts.URL)
 	result, err := svc.Execute("update", map[string]string{
 		"event-id": "evt-update-1",
-		"summary":  "Updated Title",
+		"title":    "Updated Title",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
