@@ -98,11 +98,11 @@ func (s *MsftCalService) Execute(action string, args map[string]string) (*servic
 	case "get":
 		return s.getEvent(args)
 	case "create":
-		return nil, fmt.Errorf("not implemented")
+		return s.createEvent(args)
 	case "update":
-		return nil, fmt.Errorf("not implemented")
+		return s.updateEvent(args)
 	case "delete":
-		return nil, fmt.Errorf("not implemented")
+		return s.deleteEvent(args)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
