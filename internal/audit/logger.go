@@ -38,7 +38,7 @@ func NewLogger(path string) (*Logger, error) {
 // Log writes an entry to the audit log file.
 // The entry's Timestamp is set to the current UTC time in RFC 3339 format.
 // Params are sanitised before writing.
-func (l *Logger) Log(entry Entry) error {
+func (l *Logger) Log(entry Entry) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -55,7 +55,11 @@ func (l *Logger) Log(entry Entry) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	_, err = f.Write(data)
 	return err
@@ -71,8 +75,11 @@ func sanitiseParams(params map[string]string) map[string]string {
 
 	out := make(map[string]string, len(params))
 	for k, v := range params {
-		if k == "body" && len(v) > 200 {
-			v = v[:200] + "..."
+		if k == "body" {
+			runes := []rune(v)
+			if len(runes) > 200 {
+				v = string(runes[:200]) + "..."
+			}
 		}
 		out[k] = v
 	}
