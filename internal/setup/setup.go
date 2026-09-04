@@ -151,6 +151,26 @@ func readLine(reader *bufio.Reader, prompt string) string {
 	return strings.TrimSpace(line)
 }
 
+func promptSection(reader *bufio.Reader, name string, status sectionStatus, optional bool) bool {
+	fmt.Printf("[%s]\n", name)
+	if !status.configured {
+		if optional {
+			answer := readLine(reader, fmt.Sprintf("    Not configured. Configure %s? (y/n): ", name))
+			return strings.ToLower(answer) == "y"
+		}
+		fmt.Println("    Not configured.")
+		return true
+	}
+	if !status.valid {
+		fmt.Printf("    Status: configured but invalid (%s)\n", status.reason)
+		fmt.Println("    Reconfiguring...")
+		return true
+	}
+	fmt.Printf("    Status: configured and valid (%s)\n", status.detail)
+	answer := readLine(reader, "    [S]kip / [R]econfigure? ")
+	return strings.ToLower(answer) == "r"
+}
+
 // Run executes the interactive setup wizard.
 func Run() {
 	reader := bufio.NewReader(os.Stdin)
@@ -158,7 +178,6 @@ func Run() {
 	fmt.Println("=== KumaApprove Setup Wizard ===")
 	fmt.Println()
 
-	// Create config directory and workspace.
 	if err := os.MkdirAll(config.Dir(), 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create config directory: %v\n", err)
 		os.Exit(1)
@@ -168,87 +187,108 @@ func Run() {
 		os.Exit(1)
 	}
 
-	// Start with default config.
-	cfg := config.Default()
-
-	// Telegram configuration.
-	botToken := readLine(reader, "Telegram bot token: ")
-	cfg.Telegram.BotToken = botToken
-
-	chatID, err := detectChatID(botToken)
+	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to detect chat ID: %v\n", err)
-		os.Exit(1)
+		cfg = config.Default()
 	}
-	fmt.Printf("Detected chat ID: %s\n", chatID)
-	cfg.Telegram.ChatID = chatID
-
-	// Google OAuth configuration.
-	clientID := readLine(reader, "Google OAuth client ID: ")
-	clientSecret := readLine(reader, "Google OAuth client secret: ")
-	cfg.GoogleOAuth.ClientID = clientID
-	cfg.GoogleOAuth.ClientSecret = clientSecret
-
-	// Google account.
-	account := readLine(reader, "Google account email: ")
-	cfg.Accounts = map[string][]string{
-		"gmail": {account},
-		"gcal":  {account},
+	if cfg.Accounts == nil {
+		cfg.Accounts = map[string][]string{}
 	}
 
-	// Save config.
-	if err := config.Save(cfg, config.DefaultPath()); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Config saved.")
-
-	// Set up credential store.
 	machineID, err := credstore.GetMachineID()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to get machine ID: %v\n", err)
 		os.Exit(1)
 	}
-
 	encKey, err := credstore.DeriveKey(machineID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to derive key: %v\n", err)
 		os.Exit(1)
 	}
-
 	storePath := filepath.Join(config.Dir(), "credentials.enc")
 	store, err := credstore.NewStore(storePath, encKey)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to open credential store: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "warning: credential store corrupted, will recreate: %v\n", err)
+		os.Remove(storePath)
+		store, err = credstore.NewStore(storePath, encKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create credential store: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	// Run OAuth flows.
-	gauth := &auth.GoogleAuth{
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		Store:        store,
-	}
-
+	fmt.Println("Checking existing configuration...")
 	fmt.Println()
-	fmt.Println("Authorizing Gmail...")
-	if err := gauth.RunOAuthFlow("gmail", account); err != nil {
-		fmt.Fprintf(os.Stderr, "Gmail OAuth failed: %v\n", err)
-		os.Exit(1)
-	}
 
-	fmt.Println("Authorizing Google Calendar...")
-	if err := gauth.RunOAuthFlow("gcal", account); err != nil {
-		fmt.Fprintf(os.Stderr, "Google Calendar OAuth failed: %v\n", err)
-		os.Exit(1)
-	}
+	tgStatus := validateTelegram(cfg, "")
+	gStatus := validateGoogle(cfg, store, "")
+	msStatus := validateMicrosoft(cfg, store, "")
 
+	// Section 1: Telegram
+	telegramChanged := false
+	if promptSection(reader, "Telegram", tgStatus, false) {
+		botToken := readLine(reader, "    Telegram bot token: ")
+		cfg.Telegram.BotToken = botToken
+
+		chatID, err := detectChatID(botToken)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to detect chat ID: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("    Detected chat ID: %s\n", chatID)
+		cfg.Telegram.ChatID = chatID
+		telegramChanged = true
+
+		if err := config.Save(cfg, config.DefaultPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("    Telegram configured.")
+	}
 	fmt.Println()
-	msSetup := readLine(reader, "Configure Microsoft Outlook/Calendar? (y/n): ")
-	if strings.ToLower(msSetup) == "y" {
-		msClientID := readLine(reader, "Microsoft Azure AD client ID: ")
-		msClientSecret := readLine(reader, "Microsoft Azure AD client secret: ")
-		msTenantID := readLine(reader, "Microsoft tenant ID (press Enter for 'consumers'): ")
+
+	// Section 2: Google
+	if promptSection(reader, "Google (Gmail + Calendar)", gStatus, false) {
+		clientID := readLine(reader, "    Google OAuth client ID: ")
+		clientSecret := readLine(reader, "    Google OAuth client secret: ")
+		cfg.GoogleOAuth.ClientID = clientID
+		cfg.GoogleOAuth.ClientSecret = clientSecret
+
+		account := readLine(reader, "    Google account email: ")
+		cfg.Accounts["gmail"] = []string{account}
+		cfg.Accounts["gcal"] = []string{account}
+
+		if err := config.Save(cfg, config.DefaultPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+			os.Exit(1)
+		}
+
+		gauth := &auth.GoogleAuth{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			Store:        store,
+		}
+
+		fmt.Println("    Authorizing Gmail...")
+		if err := gauth.RunOAuthFlow("gmail", account); err != nil {
+			fmt.Fprintf(os.Stderr, "Gmail OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("    Authorizing Google Calendar...")
+		if err := gauth.RunOAuthFlow("gcal", account); err != nil {
+			fmt.Fprintf(os.Stderr, "Google Calendar OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("    Google configured.")
+	}
+	fmt.Println()
+
+	// Section 3: Microsoft (optional)
+	if promptSection(reader, "Microsoft (Outlook + Calendar)", msStatus, true) {
+		msClientID := readLine(reader, "    Microsoft Azure AD client ID: ")
+		msClientSecret := readLine(reader, "    Microsoft Azure AD client secret: ")
+		msTenantID := readLine(reader, "    Microsoft tenant ID (press Enter for 'consumers'): ")
 		if msTenantID == "" {
 			msTenantID = "consumers"
 		}
@@ -259,8 +299,7 @@ func Run() {
 			TenantID:     msTenantID,
 		}
 
-		msAccount := readLine(reader, "Microsoft account email: ")
-
+		msAccount := readLine(reader, "    Microsoft account email: ")
 		cfg.Accounts["outlook"] = []string{msAccount}
 		cfg.Accounts["msft-cal"] = []string{msAccount}
 
@@ -276,29 +315,29 @@ func Run() {
 			Store:        store,
 		}
 
-		fmt.Println()
-		fmt.Println("Authorizing Outlook...")
+		fmt.Println("    Authorizing Outlook...")
 		if err := msauth.RunOAuthFlow("outlook", msAccount); err != nil {
 			fmt.Fprintf(os.Stderr, "Outlook OAuth failed: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("Authorizing Microsoft Calendar...")
+		fmt.Println("    Authorizing Microsoft Calendar...")
 		if err := msauth.RunOAuthFlow("msft-cal", msAccount); err != nil {
 			fmt.Fprintf(os.Stderr, "Microsoft Calendar OAuth failed: %v\n", err)
 			os.Exit(1)
 		}
-
-		fmt.Println("Microsoft services configured.")
+		fmt.Println("    Microsoft configured.")
 	}
-
-	// Send test Telegram message.
-	if err := sendTestMessage(botToken, chatID); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to send test message: %v\n", err)
-		os.Exit(1)
-	}
-
 	fmt.Println()
+
+	// Send Telegram test message only if Telegram was reconfigured.
+	if telegramChanged {
+		if err := sendTestMessage(cfg.Telegram.BotToken, cfg.Telegram.ChatID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to send test message: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	fmt.Println("Setup complete! KumaApprove is ready to use.")
 }
 
