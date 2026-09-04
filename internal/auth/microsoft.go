@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -14,11 +16,10 @@ import (
 )
 
 type MicrosoftAuth struct {
-	ClientID     string
-	ClientSecret string
-	TenantID     string
-	TokenURL     string
-	Store        CredentialStore
+	ClientID string
+	TenantID string
+	TokenURL string
+	Store    CredentialStore
 }
 
 var microsoftScopes = map[string][]string{
@@ -53,6 +54,75 @@ func (m *MicrosoftAuth) authorizeURL() string {
 	return fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/authorize", m.tenantID())
 }
 
+// msCallbackPort is the fixed loopback port used for the OAuth redirect.
+// Microsoft matches the redirect URI against the app registration exactly --
+// scheme, host, port and path must all match -- so the port cannot be
+// ephemeral the way it is for Google. This URI must be registered under
+// "Mobile & desktop applications" in the Azure AD app registration.
+const msCallbackPort = 8400
+
+// MicrosoftCallbackRedirectURI returns the redirect URI sent to Microsoft.
+// It must use the literal host "localhost"; Microsoft rejects loopback IPs
+// such as 127.0.0.1 for this app type (AADSTS50011). The returned URI has
+// to be registered verbatim in the Azure AD app registration.
+func MicrosoftCallbackRedirectURI() string {
+	return fmt.Sprintf("http://localhost:%d/callback", msCallbackPort)
+}
+
+// listenLoopback binds msCallbackPort dual-stack so the callback arrives
+// whether the browser resolves localhost to 127.0.0.1 or ::1, falling back
+// to IPv4-only when IPv6 is unavailable.
+func listenLoopback(port int) (net.Listener, error) {
+	l, err := net.Listen("tcp", fmt.Sprintf("[::]:%d", port))
+	if err == nil {
+		return l, nil
+	}
+	v4, v4err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if v4err != nil {
+		return nil, fmt.Errorf("binding callback port %d: %w (dual-stack attempt: %v)", port, v4err, err)
+	}
+	return v4, nil
+}
+
+// oauthState returns a random state value used to reject forged callbacks.
+func oauthState() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating OAuth state: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// callbackResult carries the outcome of the browser redirect to RunOAuthFlow.
+type callbackResult struct {
+	code  string
+	state string
+	err   error
+}
+
+// handleCallback validates the redirect query and reports on ch. Microsoft
+// puts the failure reason in error/error_description, so those are surfaced
+// verbatim rather than collapsed into "no authorization code received".
+func handleCallback(w http.ResponseWriter, r *http.Request, ch chan<- callbackResult) {
+	q := r.URL.Query()
+
+	if oauthErr := q.Get("error"); oauthErr != "" {
+		ch <- callbackResult{err: fmt.Errorf("%s: %s", oauthErr, q.Get("error_description"))}
+		fmt.Fprintf(w, "Authorization failed: %s. You may close this tab.", oauthErr)
+		return
+	}
+
+	code := q.Get("code")
+	if code == "" {
+		ch <- callbackResult{err: fmt.Errorf("no authorization code received")}
+		fmt.Fprint(w, "Error: no authorization code. Close this tab.")
+		return
+	}
+
+	ch <- callbackResult{code: code, state: q.Get("state")}
+	fmt.Fprint(w, "Authorization successful. You may close this tab.")
+}
+
 func (m *MicrosoftAuth) GetToken(service, account string) (string, error) {
 	key := service + ":" + account
 	cred, err := m.Store.Get(key)
@@ -82,7 +152,6 @@ func (m *MicrosoftAuth) GetToken(service, account string) (string, error) {
 func (m *MicrosoftAuth) refreshToken(refreshToken string) (string, string, string, error) {
 	params := url.Values{
 		"client_id":     {m.ClientID},
-		"client_secret": {m.ClientSecret},
 		"refresh_token": {refreshToken},
 		"grant_type":    {"refresh_token"},
 	}
@@ -117,54 +186,45 @@ func (m *MicrosoftAuth) RunOAuthFlow(service, account string) error {
 		return fmt.Errorf("unknown service: %s", service)
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := listenLoopback(msCallbackPort)
 	if err != nil {
 		return fmt.Errorf("starting callback server: %w", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := MicrosoftCallbackRedirectURI()
+
+	state, err := oauthState()
+	if err != nil {
+		listener.Close()
+		return err
+	}
 
 	authURL := fmt.Sprintf(
-		"%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&response_mode=query",
+		"%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&response_mode=query&state=%s",
 		m.authorizeURL(),
 		url.QueryEscape(m.ClientID),
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(strings.Join(scopes, " ")),
+		url.QueryEscape(state),
 	)
 
 	fmt.Printf("Opening browser for Microsoft authorization...\n")
 	fmt.Printf("If the browser does not open, visit:\n%s\n\n", authURL)
 	openBrowser(authURL)
 
-	codeCh := make(chan string, 1)
-	errCh := make(chan error, 1)
+	resultCh := make(chan callbackResult, 4)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			errCh <- fmt.Errorf("no authorization code received")
-			fmt.Fprint(w, "Error: no authorization code. Close this tab.")
-			return
-		}
-		codeCh <- code
-		fmt.Fprint(w, "Authorization successful. You may close this tab.")
+		handleCallback(w, r, resultCh)
 	})
 
 	server := &http.Server{Handler: mux}
 	go server.Serve(listener)
 
-	var code string
-	select {
-	case code = <-codeCh:
-	case err := <-errCh:
-		server.Shutdown(context.Background())
+	code, err := waitForAuthCode(server, resultCh, state)
+	if err != nil {
 		return err
-	case <-time.After(5 * time.Minute):
-		server.Shutdown(context.Background())
-		return fmt.Errorf("OAuth flow timed out after 5 minutes")
 	}
-	server.Shutdown(context.Background())
 
 	token, refresh, expiry, err := m.exchangeCode(code, redirectURI)
 	if err != nil {
@@ -179,13 +239,37 @@ func (m *MicrosoftAuth) RunOAuthFlow(service, account string) error {
 	})
 }
 
+// waitForAuthCode blocks until the browser callback delivers an authorization
+// code whose state matches, or until the flow times out. Callbacks with a
+// mismatched state are ignored: the callback port is fixed, so a stale tab
+// from an earlier attempt can hit the server between retries.
+func waitForAuthCode(server *http.Server, resultCh <-chan callbackResult, state string) (string, error) {
+	timeout := time.After(5 * time.Minute)
+	for {
+		select {
+		case res := <-resultCh:
+			if res.err != nil {
+				server.Shutdown(context.Background())
+				return "", res.err
+			}
+			if res.state != state {
+				continue
+			}
+			server.Shutdown(context.Background())
+			return res.code, nil
+		case <-timeout:
+			server.Shutdown(context.Background())
+			return "", fmt.Errorf("OAuth flow timed out after 5 minutes")
+		}
+	}
+}
+
 func (m *MicrosoftAuth) exchangeCode(code, redirectURI string) (string, string, string, error) {
 	params := url.Values{
-		"client_id":     {m.ClientID},
-		"client_secret": {m.ClientSecret},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"grant_type":    {"authorization_code"},
+		"client_id":    {m.ClientID},
+		"code":         {code},
+		"redirect_uri": {redirectURI},
+		"grant_type":   {"authorization_code"},
 	}
 
 	resp, err := http.PostForm(m.tokenURL(), params)

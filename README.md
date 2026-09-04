@@ -10,6 +10,7 @@ Agents invoke KumaApprove as a subprocess, receive structured JSON on stdout, an
 - A Telegram bot (create one via [@BotFather](https://t.me/botfather))
 - A Google Cloud project with Gmail API and Calendar API enabled
 - OAuth 2.0 client credentials (Desktop type) from Google Cloud Console
+- Optional: a Microsoft Entra ID (Azure AD) app registration for Outlook and Microsoft Calendar
 
 ### Google OAuth setup
 
@@ -17,6 +18,18 @@ Agents invoke KumaApprove as a subprocess, receive structured JSON on stdout, an
 2. Enable the Gmail API and Google Calendar API.
 3. Create an OAuth 2.0 Client ID (Application type: Desktop).
 4. Set the OAuth consent screen to "Production" (unverified). Users see a one-time "This app isn't verified" warning during initial auth. This avoids the 7-day refresh token expiry that "Testing" mode enforces.
+
+### Microsoft OAuth setup (optional)
+
+Only needed for the `outlook` and `msft-cal` services. Skip this and answer `n` to the
+Microsoft section of the setup wizard to use Gmail/GCal only.
+
+1. In the [Azure portal](https://portal.azure.com), go to **App registrations → New registration**.
+2. Set **Supported account types** to "Accounts in any organizational directory and personal Microsoft accounts" if personal (outlook.com/hotmail.com) sign-in is required; choose "Single tenant" for a work account only. The setup wizard defaults the tenant to `consumers`, which targets personal accounts.
+3. Under **Authentication → Mobile & desktop applications**, add the redirect URI `http://localhost:8400/callback`. No client secret is needed — the app runs as a public client.
+4. Under **API permissions**, add the delegated permissions `Mail.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, `Calendars.ReadWrite`, and `offline_access`.
+
+The redirect URI must match `http://localhost:8400/callback` **exactly** — scheme, host, port, and path. Microsoft, unlike Google, does not accept a loopback IP such as `127.0.0.1` and does not allow a wildcard port. A mismatch fails at the consent screen with `AADSTS50011` before any token is issued. If port 8400 is in use on your machine, change `msCallbackPort` in `internal/auth/microsoft.go` and register the matching URI.
 
 ## Installation
 
@@ -117,6 +130,8 @@ kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true
 # Re-authorize a service for an account
 kuma-approve auth gmail user@gmail.com
 kuma-approve auth gcal user@gmail.com
+kuma-approve auth outlook you@outlook.com
+kuma-approve auth msft-cal you@outlook.com
 ```
 
 ### Multi-account
@@ -209,12 +224,20 @@ Config file: `~/.kuma-approve/config.json`
     "client_id": "...",
     "client_secret": "..."
   },
+  "microsoft_oauth": {
+    "client_id": "...",
+    "tenant_id": "consumers"
+  },
   "accounts": {
     "gmail": ["personal@gmail.com"],
-    "gcal": ["personal@gmail.com"]
+    "gcal": ["personal@gmail.com"],
+    "outlook": ["you@outlook.com"],
+    "msft-cal": ["you@outlook.com"]
   }
 }
 ```
+
+`microsoft_oauth` and the `outlook`/`msft-cal` account entries are optional. Omit them (or leave `microsoft_oauth.client_id` empty) and the Outlook/Calendar services are not registered, so `kuma-approve outlook ...` fails with `unknown service`. `tenant_id` defaults to `consumers` (personal Microsoft accounts); use `common` or a specific tenant GUID for work/school accounts.
 
 Override any action's tier in the `tiers` map. Add commands to `safe_list` to auto-approve them, or add regex patterns to `deny_list_patterns` to block them entirely.
 

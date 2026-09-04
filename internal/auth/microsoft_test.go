@@ -1,14 +1,180 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jhyoong/KumaApprove/internal/credstore"
 )
+
+func TestMSCallbackRedirectURIIsFixedLoopback(t *testing.T) {
+	// Microsoft matches the redirect URI exactly and requires the literal
+	// host "localhost" for desktop apps; an ephemeral port or loopback IP
+	// fails consent with AADSTS50011.
+	got := MicrosoftCallbackRedirectURI()
+	want := "http://localhost:8400/callback"
+	if got != want {
+		t.Fatalf("redirect URI = %q, want %q", got, want)
+	}
+	if strings.HasPrefix(got, "http://127.0.0.1") {
+		t.Fatal("redirect URI must use host localhost, not 127.0.0.1")
+	}
+}
+
+func TestMSListenLoopbackServesIPv4andIPv6(t *testing.T) {
+	l, err := listenLoopback(msCallbackPort)
+	if err != nil {
+		if strings.Contains(err.Error(), "address already in use") {
+			t.Skipf("callback port %d busy: %v", msCallbackPort, err)
+		}
+		t.Fatalf("listenLoopback: %v", err)
+	}
+	defer l.Close()
+
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})}
+	go srv.Serve(l)
+	defer srv.Shutdown(context.Background())
+
+	time.Sleep(100 * time.Millisecond)
+
+	tcpAddr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("unexpected listener addr type %T", l.Addr())
+	}
+
+	// The advertised URI is "localhost", which resolves to ::1 or 127.0.0.1
+	// depending on the host. Whichever it picks must reach the server, so a
+	// dual-stack bind is required unless IPv6 is unavailable.
+	hosts := []string{"127.0.0.1"}
+	if tcpAddr.IP.To4() == nil {
+		hosts = append(hosts, "::1")
+	}
+
+	for _, host := range hosts {
+		u := "http://" + host + ":" + strconv.Itoa(msCallbackPort) + "/callback"
+		if strings.Contains(host, ":") {
+			u = "http://[" + host + "]:" + strconv.Itoa(msCallbackPort) + "/callback"
+		}
+		resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(u)
+		if err != nil {
+			t.Errorf("callback unreachable via %s: %v", host, err)
+			continue
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func TestHandleCallback(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		wantErr bool
+		wantMsg string
+	}{
+		{
+			name:  "authorization code returned",
+			query: "?code=auth-code-123&state=abc",
+		},
+		{
+			name:    "microsoft error surfaces description",
+			query:   "?error=invalid_request&error_description=redirect_uri+mismatch",
+			wantErr: true,
+			wantMsg: "redirect_uri mismatch",
+		},
+		{
+			name:    "missing code and error",
+			query:   "?state=abc",
+			wantErr: true,
+			wantMsg: "no authorization code",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := make(chan callbackResult, 1)
+			req := httptest.NewRequest(http.MethodGet, "/callback"+tc.query, nil)
+			rec := httptest.NewRecorder()
+
+			handleCallback(rec, req, ch)
+
+			select {
+			case res := <-ch:
+				if tc.wantErr {
+					if res.err == nil {
+						t.Fatal("expected error, got nil")
+					}
+					if !strings.Contains(res.err.Error(), tc.wantMsg) {
+						t.Errorf("error = %q, want substring %q", res.err, tc.wantMsg)
+					}
+					return
+				}
+				if res.err != nil {
+					t.Fatalf("unexpected error: %v", res.err)
+				}
+				if res.code != "auth-code-123" {
+					t.Errorf("code = %q, want auth-code-123", res.code)
+				}
+				if res.state != "abc" {
+					t.Errorf("state = %q, want abc", res.state)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("handleCallback did not report a result")
+			}
+		})
+	}
+}
+
+func TestMSAuthURLIncludesRegisteredRedirectAndState(t *testing.T) {
+	auth := &MicrosoftAuth{ClientID: "ms-client-id", TenantID: "consumers"}
+
+	state, err := oauthState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state) != 32 {
+		t.Fatalf("state length = %d, want 32 hex chars", len(state))
+	}
+
+	authURL := auth.authorizeURL() + "?redirect_uri=" + url.QueryEscape(MicrosoftCallbackRedirectURI()) +
+		"&state=" + url.QueryEscape(state)
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("redirect_uri"); got != MicrosoftCallbackRedirectURI() {
+		t.Errorf("redirect_uri = %q, want %q", got, MicrosoftCallbackRedirectURI())
+	}
+	if got := parsed.Query().Get("state"); got != state {
+		t.Errorf("state = %q, want %q", got, state)
+	}
+}
+
+func TestOAuthStateIsUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		s, err := oauthState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[s] {
+			t.Fatalf("duplicate state generated: %s", s)
+		}
+		seen[s] = true
+	}
+}
 
 func TestMicrosoftGetTokenStillValid(t *testing.T) {
 	store := newFakeStore()
@@ -60,7 +226,6 @@ func TestMicrosoftRefreshToken(t *testing.T) {
 
 	provider := &MicrosoftAuth{
 		ClientID:     "ms-client-id",
-		ClientSecret: "ms-client-secret",
 		TenantID:     "consumers",
 		TokenURL:     server.URL,
 		Store:        store,
@@ -112,7 +277,6 @@ func TestMicrosoftRefreshFailure(t *testing.T) {
 
 	provider := &MicrosoftAuth{
 		ClientID:     "ms-client-id",
-		ClientSecret: "ms-client-secret",
 		TenantID:     "consumers",
 		TokenURL:     server.URL,
 		Store:        store,

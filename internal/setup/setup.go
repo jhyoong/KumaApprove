@@ -114,11 +114,10 @@ func validateMicrosoft(cfg config.Config, store auth.CredentialStore, tokenURL s
 	}
 
 	msauth := &auth.MicrosoftAuth{
-		ClientID:     cfg.MicrosoftOAuth.ClientID,
-		ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
-		TenantID:     cfg.MicrosoftOAuth.TenantID,
-		TokenURL:     tokenURL,
-		Store:        store,
+		ClientID: cfg.MicrosoftOAuth.ClientID,
+		TenantID: cfg.MicrosoftOAuth.TenantID,
+		TokenURL: tokenURL,
+		Store:    store,
 	}
 
 	var account string
@@ -291,16 +290,14 @@ func Run() {
 	// Section 3: Microsoft (optional)
 	if promptSection(reader, "Microsoft (Outlook + Calendar)", msStatus, true) {
 		msClientID := readLine(reader, "    Microsoft Azure AD client ID: ")
-		msClientSecret := readLine(reader, "    Microsoft Azure AD client secret: ")
 		msTenantID := readLine(reader, "    Microsoft tenant ID (press Enter for 'consumers'): ")
 		if msTenantID == "" {
 			msTenantID = "consumers"
 		}
 
 		cfg.MicrosoftOAuth = config.MicrosoftOAuthConfig{
-			ClientID:     msClientID,
-			ClientSecret: msClientSecret,
-			TenantID:     msTenantID,
+			ClientID: msClientID,
+			TenantID: msTenantID,
 		}
 
 		msAccount := readLine(reader, "    Microsoft account email: ")
@@ -313,11 +310,14 @@ func Run() {
 		}
 
 		msauth := &auth.MicrosoftAuth{
-			ClientID:     msClientID,
-			ClientSecret: msClientSecret,
-			TenantID:     msTenantID,
-			Store:        store,
+			ClientID: msClientID,
+			TenantID: msTenantID,
+			Store:    store,
 		}
+
+		// Microsoft matches this URI against the app registration exactly,
+		// so print it up front to make AADSTS50011 easy to diagnose.
+		fmt.Printf("    Redirect URI (must be registered under Mobile & desktop applications):\n        %s\n", auth.MicrosoftCallbackRedirectURI())
 
 		fmt.Println("    Authorizing Outlook...")
 		if err := msauth.RunOAuthFlow("outlook", msAccount); err != nil {
@@ -375,10 +375,9 @@ func RunAuth(serviceName, account string) {
 	switch serviceName {
 	case "outlook", "msft-cal":
 		msauth := &auth.MicrosoftAuth{
-			ClientID:     cfg.MicrosoftOAuth.ClientID,
-			ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
-			TenantID:     cfg.MicrosoftOAuth.TenantID,
-			Store:        store,
+			ClientID: cfg.MicrosoftOAuth.ClientID,
+			TenantID: cfg.MicrosoftOAuth.TenantID,
+			Store:    store,
 		}
 		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
 		if err := msauth.RunOAuthFlow(serviceName, account); err != nil {

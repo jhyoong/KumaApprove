@@ -248,7 +248,7 @@ func TestValidateMicrosoftValid(t *testing.T) {
 	})
 
 	cfg := config.Config{
-		MicrosoftOAuth: config.MicrosoftOAuthConfig{ClientID: "cid", ClientSecret: "csec", TenantID: "consumers"},
+		MicrosoftOAuth: config.MicrosoftOAuthConfig{ClientID: "cid", TenantID: "consumers"},
 		Accounts:       map[string][]string{"outlook": {"user@outlook.com"}, "msft-cal": {"user@outlook.com"}},
 	}
 	status := validateMicrosoft(cfg, store, server.URL)
@@ -274,7 +274,7 @@ func TestValidateMicrosoftExpiredToken(t *testing.T) {
 	})
 
 	cfg := config.Config{
-		MicrosoftOAuth: config.MicrosoftOAuthConfig{ClientID: "cid", ClientSecret: "csec", TenantID: "consumers"},
+		MicrosoftOAuth: config.MicrosoftOAuthConfig{ClientID: "cid", TenantID: "consumers"},
 		Accounts:       map[string][]string{"outlook": {"user@outlook.com"}},
 	}
 	status := validateMicrosoft(cfg, store, server.URL)

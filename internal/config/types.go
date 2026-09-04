@@ -40,7 +40,6 @@ type GoogleOAuthConfig struct {
 
 // MicrosoftOAuthConfig holds Microsoft/Azure AD OAuth client credentials.
 type MicrosoftOAuthConfig struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	TenantID     string `json:"tenant_id"`
+	ClientID string `json:"client_id"`
+	TenantID string `json:"tenant_id"`
 }

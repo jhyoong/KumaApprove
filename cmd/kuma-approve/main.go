@@ -110,10 +110,9 @@ func main() {
 	var msauth *auth.MicrosoftAuth
 	if cfg.MicrosoftOAuth.ClientID != "" {
 		msauth = &auth.MicrosoftAuth{
-			ClientID:     cfg.MicrosoftOAuth.ClientID,
-			ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
-			TenantID:     cfg.MicrosoftOAuth.TenantID,
-			Store:        store,
+			ClientID: cfg.MicrosoftOAuth.ClientID,
+			TenantID: cfg.MicrosoftOAuth.TenantID,
+			Store:    store,
 		}
 	}
 
@@ -263,10 +262,9 @@ func runAuth(args []string) {
 	switch serviceName {
 	case "outlook", "msft-cal":
 		msauth := &auth.MicrosoftAuth{
-			ClientID:     cfg.MicrosoftOAuth.ClientID,
-			ClientSecret: cfg.MicrosoftOAuth.ClientSecret,
-			TenantID:     cfg.MicrosoftOAuth.TenantID,
-			Store:        store,
+			ClientID: cfg.MicrosoftOAuth.ClientID,
+			TenantID: cfg.MicrosoftOAuth.TenantID,
+			Store:    store,
 		}
 		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
 		if err := msauth.RunOAuthFlow(serviceName, account); err != nil {
