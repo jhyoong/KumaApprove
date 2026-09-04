@@ -8,7 +8,10 @@ import (
 )
 
 func TestDirectExec(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := svc.Execute("run", map[string]string{
 		"cmd": "echo hello world",
 	})
@@ -25,7 +28,10 @@ func TestDirectExec(t *testing.T) {
 }
 
 func TestShellMode(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := svc.Execute("run", map[string]string{
 		"cmd":   "echo foo && echo bar",
 		"shell": "true",
@@ -44,7 +50,10 @@ func TestShellMode(t *testing.T) {
 }
 
 func TestDenyListBlock(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -70,7 +79,10 @@ func TestDenyListBlock(t *testing.T) {
 }
 
 func TestSafeListClassification(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		cmd  string
@@ -92,7 +104,10 @@ func TestSafeListClassification(t *testing.T) {
 }
 
 func TestShellBumpsToApprove(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Even a safe "echo" command should be bumped to "approve" in shell mode.
 	tier := svc.GetTierWithShell("echo hello")
@@ -102,10 +117,13 @@ func TestShellBumpsToApprove(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
-	svc := New(ExecConfig{
+	svc, err := New(ExecConfig{
 		TimeoutSeconds: 1,
 	})
-	_, err := svc.Execute("run", map[string]string{
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Execute("run", map[string]string{
 		"cmd": "sleep 10",
 	})
 	if err == nil {
@@ -117,9 +135,12 @@ func TestTimeout(t *testing.T) {
 }
 
 func TestOutputTruncation(t *testing.T) {
-	svc := New(ExecConfig{
+	svc, err := New(ExecConfig{
 		MaxOutputBytes: 10,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Generate output longer than 10 bytes.
 	result, err := svc.Execute("run", map[string]string{
 		"cmd": "echo abcdefghijklmnopqrstuvwxyz",
@@ -137,8 +158,11 @@ func TestOutputTruncation(t *testing.T) {
 }
 
 func TestMissingCmd(t *testing.T) {
-	svc := New(ExecConfig{})
-	_, err := svc.Execute("run", map[string]string{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Execute("run", map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing cmd, got nil")
 	}
@@ -148,8 +172,11 @@ func TestMissingCmd(t *testing.T) {
 }
 
 func TestUnknownAction(t *testing.T) {
-	svc := New(ExecConfig{})
-	_, err := svc.Execute("deploy", map[string]string{
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Execute("deploy", map[string]string{
 		"cmd": "echo hello",
 	})
 	if err == nil {
@@ -161,7 +188,10 @@ func TestUnknownAction(t *testing.T) {
 }
 
 func TestActions(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	actions := svc.Actions()
 	if len(actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(actions))
@@ -172,7 +202,10 @@ func TestActions(t *testing.T) {
 }
 
 func TestName(t *testing.T) {
-	svc := New(ExecConfig{})
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if svc.Name() != "exec" {
 		t.Errorf("expected name 'exec', got %q", svc.Name())
 	}

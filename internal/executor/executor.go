@@ -12,6 +12,38 @@ import (
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
+// limitWriter is a bounded writer that stops buffering once max bytes is reached.
+type limitWriter struct {
+	buf       []byte
+	n         int
+	max       int
+	truncated bool
+}
+
+func newLimitWriter(max int) *limitWriter {
+	return &limitWriter{buf: make([]byte, max), max: max}
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	avail := w.max - w.n
+	if avail <= 0 {
+		w.truncated = true
+		return n, nil
+	}
+	if len(p) > avail {
+		w.truncated = true
+		p = p[:avail]
+	}
+	copy(w.buf[w.n:], p)
+	w.n += len(p)
+	return n, nil
+}
+
+func (w *limitWriter) String() string {
+	return string(w.buf[:w.n])
+}
+
 // Default limits.
 const (
 	defaultTimeoutSeconds = 30
@@ -33,19 +65,18 @@ var defaultSafeList = map[string]string{
 	"pwd":    approval.TierAuto,
 	"uname":  approval.TierAuto,
 	"which":  approval.TierAuto,
-	"env":    approval.TierAuto,
+	"env":    approval.TierApprove,
 	"git":    approval.TierApprove,
 }
 
 // Default deny patterns.
 var defaultDenyPatterns = []string{
-	`^sudo`,
+	`\bsudo\b`,
 	`\brm\s+(-[a-zA-Z]*f|-rf|--force)`,
 	`\bmkfs\b`,
 	`\bdd\b`,
-	`\bformat\b`,
 	`\bfdisk\b`,
-	`\bchmod\s+777`,
+	`\bchmod\b`,
 	`\bchown\b`,
 }
 
@@ -75,7 +106,8 @@ type ExecService struct {
 
 // New creates a new ExecService from the given configuration.
 // It compiles deny-list regex patterns and applies defaults where needed.
-func New(cfg ExecConfig) *ExecService {
+// Returns an error if any deny pattern is an invalid regular expression.
+func New(cfg ExecConfig) (*ExecService, error) {
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = defaultTimeoutSeconds
 	}
@@ -95,14 +127,18 @@ func New(cfg ExecConfig) *ExecService {
 
 	compiled := make([]*regexp.Regexp, 0, len(denyRaw))
 	for _, p := range denyRaw {
-		compiled = append(compiled, regexp.MustCompile(p))
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return nil, fmt.Errorf("invalid deny pattern %q: %w", p, err)
+		}
+		compiled = append(compiled, re)
 	}
 
 	return &ExecService{
 		config:       cfg,
 		denyPatterns: compiled,
 		safeList:     safeList,
-	}
+	}, nil
 }
 
 // Name returns the service name.
@@ -163,9 +199,10 @@ func (e *ExecService) Execute(action string, args map[string]string) (*service.R
 		cmd.Dir = e.config.WorkingDirectory
 	}
 
-	var stdoutBuf, stderrBuf strings.Builder
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	stdoutBuf := newLimitWriter(e.config.MaxOutputBytes)
+	stderrBuf := newLimitWriter(e.config.MaxOutputBytes)
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
 	err := cmd.Run()
 
@@ -181,25 +218,12 @@ func (e *ExecService) Execute(action string, args map[string]string) (*service.R
 		}
 	}
 
-	stdout := stdoutBuf.String()
-	stderr := stderrBuf.String()
-	truncated := false
-
-	if len(stdout) > e.config.MaxOutputBytes {
-		stdout = stdout[:e.config.MaxOutputBytes]
-		truncated = true
-	}
-	if len(stderr) > e.config.MaxOutputBytes {
-		stderr = stderr[:e.config.MaxOutputBytes]
-		truncated = true
-	}
-
 	return &service.Result{
 		Data: &ExecResult{
-			Stdout:    stdout,
-			Stderr:    stderr,
+			Stdout:    stdoutBuf.String(),
+			Stderr:    stderrBuf.String(),
 			ExitCode:  exitCode,
-			Truncated: truncated,
+			Truncated: stdoutBuf.truncated || stderrBuf.truncated,
 		},
 	}, nil
 }
