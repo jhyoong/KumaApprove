@@ -58,6 +58,46 @@ func validateTelegram(cfg config.Config, apiBase string) sectionStatus {
 	return sectionStatus{configured: true, valid: true, detail: detail}
 }
 
+func validateGoogle(cfg config.Config, store auth.CredentialStore, tokenURL string) sectionStatus {
+	if cfg.GoogleOAuth.ClientID == "" {
+		return sectionStatus{configured: false}
+	}
+
+	gmailAccounts := cfg.Accounts["gmail"]
+	gcalAccounts := cfg.Accounts["gcal"]
+	if len(gmailAccounts) == 0 && len(gcalAccounts) == 0 {
+		return sectionStatus{configured: false}
+	}
+
+	gauth := &auth.GoogleAuth{
+		ClientID:     cfg.GoogleOAuth.ClientID,
+		ClientSecret: cfg.GoogleOAuth.ClientSecret,
+		TokenURL:     tokenURL,
+		Store:        store,
+	}
+
+	var account string
+	if len(gmailAccounts) > 0 {
+		account = gmailAccounts[0]
+	} else {
+		account = gcalAccounts[0]
+	}
+	detail := "account: " + account
+
+	for _, acct := range gmailAccounts {
+		if _, err := gauth.GetToken("gmail", acct); err != nil {
+			return sectionStatus{configured: true, valid: false, reason: fmt.Sprintf("Gmail token invalid for %s: %v", acct, err), detail: detail}
+		}
+	}
+	for _, acct := range gcalAccounts {
+		if _, err := gauth.GetToken("gcal", acct); err != nil {
+			return sectionStatus{configured: true, valid: false, reason: fmt.Sprintf("GCal token invalid for %s: %v", acct, err), detail: detail}
+		}
+	}
+
+	return sectionStatus{configured: true, valid: true, detail: detail}
+}
+
 // readLine prints the prompt to stdout, reads one line from reader,
 // trims whitespace, and returns the result.
 func readLine(reader *bufio.Reader, prompt string) string {

@@ -3,12 +3,15 @@ package setup
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jhyoong/KumaApprove/internal/config"
+	"github.com/jhyoong/KumaApprove/internal/credstore"
 )
 
 func TestReadLine(t *testing.T) {
@@ -105,5 +108,110 @@ func TestValidateTelegramInvalid(t *testing.T) {
 	}
 	if status.reason == "" {
 		t.Fatal("expected a reason")
+	}
+}
+
+type fakeStore struct {
+	creds map[string]credstore.Credential
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{creds: make(map[string]credstore.Credential)}
+}
+
+func (f *fakeStore) Get(key string) (credstore.Credential, error) {
+	c, ok := f.creds[key]
+	if !ok {
+		return credstore.Credential{}, fmt.Errorf("not found: %s", key)
+	}
+	return c, nil
+}
+
+func (f *fakeStore) Put(key string, c credstore.Credential) error {
+	f.creds[key] = c
+	return nil
+}
+
+func TestValidateGoogleNotConfigured(t *testing.T) {
+	cfg := config.Config{}
+	store := newFakeStore()
+	status := validateGoogle(cfg, store, "")
+	if status.configured {
+		t.Fatal("expected not configured")
+	}
+}
+
+func TestValidateGoogleValid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "new-token",
+			"expires_in":   3600,
+		})
+	}))
+	defer server.Close()
+
+	store := newFakeStore()
+	store.Put("gmail:user@gmail.com", credstore.Credential{
+		AccessToken:  "old-token",
+		RefreshToken: "refresh-123",
+		Expiry:       time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+	})
+	store.Put("gcal:user@gmail.com", credstore.Credential{
+		AccessToken:  "old-token",
+		RefreshToken: "refresh-456",
+		Expiry:       time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+	})
+
+	cfg := config.Config{
+		GoogleOAuth: config.GoogleOAuthConfig{ClientID: "cid", ClientSecret: "csec"},
+		Accounts:    map[string][]string{"gmail": {"user@gmail.com"}, "gcal": {"user@gmail.com"}},
+	}
+	status := validateGoogle(cfg, store, server.URL)
+	if !status.configured || !status.valid {
+		t.Fatalf("expected configured+valid, got configured=%v valid=%v reason=%s", status.configured, status.valid, status.reason)
+	}
+}
+
+func TestValidateGoogleExpiredToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":             "invalid_grant",
+			"error_description": "Token has been revoked",
+		})
+	}))
+	defer server.Close()
+
+	store := newFakeStore()
+	store.Put("gmail:user@gmail.com", credstore.Credential{
+		AccessToken:  "old-token",
+		RefreshToken: "bad-refresh",
+		Expiry:       time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+	})
+
+	cfg := config.Config{
+		GoogleOAuth: config.GoogleOAuthConfig{ClientID: "cid", ClientSecret: "csec"},
+		Accounts:    map[string][]string{"gmail": {"user@gmail.com"}, "gcal": {"user@gmail.com"}},
+	}
+	status := validateGoogle(cfg, store, server.URL)
+	if !status.configured {
+		t.Fatal("expected configured")
+	}
+	if status.valid {
+		t.Fatal("expected invalid")
+	}
+}
+
+func TestValidateGoogleNoCredentials(t *testing.T) {
+	store := newFakeStore()
+	cfg := config.Config{
+		GoogleOAuth: config.GoogleOAuthConfig{ClientID: "cid", ClientSecret: "csec"},
+		Accounts:    map[string][]string{"gmail": {"user@gmail.com"}},
+	}
+	status := validateGoogle(cfg, store, "")
+	if !status.configured {
+		t.Fatal("expected configured")
+	}
+	if status.valid {
+		t.Fatal("expected invalid when no credentials in store")
 	}
 }
