@@ -69,6 +69,9 @@ func (g *GmailService) list(args map[string]string) (*service.Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid limit: %w", err)
 		}
+		if n <= 0 || n > 500 {
+			return nil, fmt.Errorf("limit must be between 1 and 500")
+		}
 		limit = n
 	}
 
@@ -112,6 +115,9 @@ func (g *GmailService) search(args map[string]string) (*service.Result, error) {
 		n, err := strconv.Atoi(l)
 		if err != nil {
 			return nil, fmt.Errorf("invalid limit: %w", err)
+		}
+		if n <= 0 || n > 500 {
+			return nil, fmt.Errorf("limit must be between 1 and 500")
 		}
 		limit = n
 	}
@@ -180,14 +186,16 @@ func (g *GmailService) fetchSummaries(ids []string) ([]MessageSummary, error) {
 		if err != nil {
 			return nil, fmt.Errorf("getting message %s: %w", id, err)
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return nil, fmt.Errorf("get message %s: status %d", id, resp.StatusCode)
 		}
 
 		var msg gmailMessage
-		if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
+		err = json.NewDecoder(resp.Body).Decode(&msg)
+		resp.Body.Close()
+		if err != nil {
 			return nil, fmt.Errorf("decoding message %s: %w", id, err)
 		}
 
