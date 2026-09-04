@@ -71,7 +71,11 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 			Details: args,
 		})
 		if err != nil {
-			r.logAction(actionKey, account, args, "timeout", "failure", "APPROVAL_TIMEOUT")
+			errCode := "APPROVAL_ERROR"
+			if ctx.Err() == context.DeadlineExceeded {
+				errCode = "APPROVAL_TIMEOUT"
+			}
+			r.logAction(actionKey, account, args, "error", "failure", errCode)
 			return nil, fmt.Errorf("approval failed: %w", err)
 		}
 		if !result.Approved {
