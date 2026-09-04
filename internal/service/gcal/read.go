@@ -163,24 +163,6 @@ func (c *CalendarService) getEvent(args map[string]string) (*service.Result, err
 		return nil, fmt.Errorf("decoding event %s: %w", eventID, err)
 	}
 
-	attendees := make([]Attendee, len(event.Attendees))
-	for i, a := range event.Attendees {
-		attendees[i] = Attendee{
-			Email:          a.Email,
-			ResponseStatus: a.ResponseStatus,
-		}
-	}
-
-	detail := EventDetail{
-		ID:          event.ID,
-		Summary:     event.Summary,
-		Description: event.Description,
-		Location:    event.Location,
-		Start:       resolveTime(event.Start),
-		End:         resolveTime(event.End),
-		Status:      event.Status,
-		Attendees:   attendees,
-	}
-
+	detail := eventToDetail(event)
 	return &service.Result{Data: detail}, nil
 }

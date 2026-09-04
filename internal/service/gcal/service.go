@@ -97,6 +97,12 @@ func (c *CalendarService) Execute(action string, args map[string]string) (*servi
 		return c.list(args)
 	case "get":
 		return c.getEvent(args)
+	case "create":
+		return c.createEvent(args)
+	case "update":
+		return c.updateEvent(args)
+	case "delete":
+		return c.deleteEvent(args)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
