@@ -84,7 +84,7 @@ func (g *GmailService) Actions() []service.ActionDefinition {
 		},
 		{
 			Name:        "draft",
-			DefaultTier: approval.TierAuto,
+			DefaultTier: approval.TierApprove,
 			Description: "Create a draft email",
 			Params: []service.ParamDef{
 				{Name: "to", Required: true, Description: "Recipient email"},

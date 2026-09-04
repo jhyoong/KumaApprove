@@ -30,6 +30,9 @@ func (g *GmailService) send(args map[string]string) (*service.Result, error) {
 		return nil, fmt.Errorf("missing required parameter: subject")
 	}
 	body := args["body"]
+	if body == "" {
+		return nil, fmt.Errorf("gmail send: --body is required")
+	}
 
 	raw := buildRawEmail(to, subject, body, "", "")
 	return g.sendRaw(raw, "")
