@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,13 +59,16 @@ func main() {
 		}
 	}
 	if !isKnown {
-		fmt.Fprintf(os.Stderr, "Error: unknown service %q\n", serviceName)
+		env := output.Fail(
+			serviceName+":unknown",
+			"UNKNOWN_SERVICE",
+			fmt.Sprintf("unknown service %q; available: %s", serviceName, strings.Join(knownServices, ", ")),
+		)
 		if suggestion := closestMatch(serviceName, knownServices); suggestion != "" {
-			fmt.Fprintf(os.Stderr, "\nDid you mean %q?\n", suggestion)
+			env.Error.DidYouMean = suggestion
 		}
-		fmt.Fprintf(os.Stderr, "\nAvailable services: %s\n", strings.Join(knownServices, ", "))
-		fmt.Fprintf(os.Stderr, "Run 'kuma-approve --help' for usage.\n")
-		os.Exit(1)
+		output.PrintAndExit(env)
+		return
 	}
 
 	// Check for service-level help before requiring an action.
@@ -110,13 +114,16 @@ func main() {
 			}
 		}
 		if !found {
-			fmt.Fprintf(os.Stderr, "Error: unknown action %q for service %q\n", actionName, serviceName)
+			env := output.Fail(
+				serviceName+":"+actionName,
+				"UNKNOWN_ACTION",
+				fmt.Sprintf("unknown action %q for service %q; available: %s", actionName, serviceName, strings.Join(validActions, ", ")),
+			)
 			if suggestion := closestMatch(actionName, validActions); suggestion != "" {
-				fmt.Fprintf(os.Stderr, "\nDid you mean %q?\n", suggestion)
+				env.Error.DidYouMean = suggestion
 			}
-			fmt.Fprintf(os.Stderr, "\nAvailable actions: %s\n", strings.Join(validActions, ", "))
-			fmt.Fprintf(os.Stderr, "Run 'kuma-approve %s --help' for details.\n", serviceName)
-			os.Exit(1)
+			output.PrintAndExit(env)
+			return
 		}
 	}
 
@@ -251,9 +258,14 @@ func main() {
 
 	result, err := router.Dispatch(serviceName, actionName, account, args)
 	if err != nil {
+		code := "DISPATCH_ERROR"
+		var re *cli.RouterError
+		if errors.As(err, &re) {
+			code = re.Code
+		}
 		output.PrintAndExit(output.Fail(
 			serviceName+":"+actionName,
-			"DISPATCH_ERROR",
+			code,
 			err.Error(),
 		))
 		return

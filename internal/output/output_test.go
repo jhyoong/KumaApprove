@@ -57,6 +57,41 @@ func TestErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestErrorEnvelopeDidYouMean(t *testing.T) {
+	env := Fail("bogus:unknown", "UNKNOWN_SERVICE", "unknown service \"bogus\"")
+	env.Error.DidYouMean = "gmail"
+
+	b, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	json.Unmarshal(b, &raw)
+
+	errObj := raw["error"].(map[string]any)
+	if errObj["did_you_mean"] != "gmail" {
+		t.Fatalf("expected did_you_mean=gmail, got %v", errObj["did_you_mean"])
+	}
+}
+
+func TestErrorEnvelopeDidYouMeanOmitted(t *testing.T) {
+	env := Fail("gmail:send", "API_ERROR", "something broke")
+
+	b, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	json.Unmarshal(b, &raw)
+
+	errObj := raw["error"].(map[string]any)
+	if _, exists := errObj["did_you_mean"]; exists {
+		t.Fatal("expected did_you_mean to be omitted when empty")
+	}
+}
+
 func TestErrorCodes(t *testing.T) {
 	valid := map[string]bool{
 		"APPROVAL_REJECTED": true,

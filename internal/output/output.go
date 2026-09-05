@@ -14,8 +14,9 @@ type Envelope struct {
 }
 
 type ErrorInfo struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	DidYouMean string `json:"did_you_mean,omitempty"`
 }
 
 func Success(action string, data any) Envelope {
