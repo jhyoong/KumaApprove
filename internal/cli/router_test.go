@@ -340,3 +340,105 @@ func TestRouterErrorCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestRouterValidateBeforeApprove(t *testing.T) {
+	svc := &fakeService{
+		name: "gmail",
+		actions: []service.ActionDefinition{
+			{
+				Name:        "send",
+				DefaultTier: "approve",
+				Params: []service.ParamDef{
+					{Name: "to", Required: true, Description: "Recipient"},
+					{Name: "subject", Required: true, Description: "Subject"},
+					{Name: "body", Required: true, Description: "Body"},
+				},
+			},
+		},
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	approver := &fakeApprover{approved: true}
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+		Approver: approver,
+	})
+
+	_, err := r.Dispatch("gmail", "send", "user@test.com", map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for missing params")
+	}
+
+	var re *RouterError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected *RouterError, got %T", err)
+	}
+	if re.Code != "INVALID_ARGS" {
+		t.Fatalf("expected INVALID_ARGS, got %s", re.Code)
+	}
+	if approver.called {
+		t.Fatal("approver should NOT be called when params are missing")
+	}
+}
+
+func TestRouterValidatePassesWithAllParams(t *testing.T) {
+	svc := &fakeService{
+		name: "gmail",
+		actions: []service.ActionDefinition{
+			{
+				Name:        "send",
+				DefaultTier: "approve",
+				Params: []service.ParamDef{
+					{Name: "to", Required: true},
+					{Name: "subject", Required: true},
+					{Name: "body", Required: true},
+				},
+			},
+		},
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	approver := &fakeApprover{approved: true}
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+		Approver: approver,
+	})
+
+	_, err := r.Dispatch("gmail", "send", "user@test.com", map[string]string{
+		"to":      "a@b.com",
+		"subject": "Hi",
+		"body":    "Hello",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !approver.called {
+		t.Fatal("expected approver to be called")
+	}
+}
+
+func TestRouterValidateOptionalParamsNotRequired(t *testing.T) {
+	svc := &fakeService{
+		name: "gmail",
+		actions: []service.ActionDefinition{
+			{
+				Name:        "list",
+				DefaultTier: "auto",
+				Params: []service.ParamDef{
+					{Name: "limit", Required: false},
+				},
+			},
+		},
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	r := NewRouter(RouterConfig{Registry: reg})
+
+	_, err := r.Dispatch("gmail", "list", "user@test.com", map[string]string{})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}

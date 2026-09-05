@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jhyoong/KumaApprove/internal/approval"
@@ -47,6 +48,18 @@ func NewRouter(cfg RouterConfig) *Router {
 	return &Router{config: cfg}
 }
 
+func validateParams(actionDef service.ActionDefinition, args map[string]string) []string {
+	var missing []string
+	for _, p := range actionDef.Params {
+		if p.Required {
+			if v, ok := args[p.Name]; !ok || v == "" {
+				missing = append(missing, p.Name)
+			}
+		}
+	}
+	return missing
+}
+
 // Dispatch looks up the action, resolves its approval tier, requests approval
 // if needed, executes the action, and logs the outcome.
 func (r *Router) Dispatch(serviceName, actionName, account string, args map[string]string) (any, error) {
@@ -57,6 +70,13 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	if err != nil {
 		r.logAction(actionKey, account, args, "denied", "failure", "INVALID_ARGS")
 		return nil, &RouterError{Code: "INVALID_ARGS", Message: err.Error(), Err: err}
+	}
+
+	// Validate required parameters before approval gate.
+	if missing := validateParams(actionDef, args); len(missing) > 0 {
+		msg := fmt.Sprintf("missing required parameter(s): %s", strings.Join(missing, ", "))
+		r.logAction(actionKey, account, args, "denied", "failure", "INVALID_ARGS")
+		return nil, &RouterError{Code: "INVALID_ARGS", Message: msg}
 	}
 
 	// Resolve tier.
