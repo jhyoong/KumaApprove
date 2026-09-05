@@ -241,6 +241,60 @@ Config file: `~/.kuma-approve/config.json`
 
 Override any action's tier in the `tiers` map. Add commands to `safe_list` to auto-approve them, or add regex patterns to `deny_list_patterns` to block them entirely.
 
+## Docker / Container Usage
+
+KumaApprove can run inside a Docker container (for example, as a tool available to an AI agent). Two things need special handling: OAuth callbacks and credential encryption.
+
+### OAuth callback ports
+
+During `kuma-approve setup`, Google and Microsoft OAuth flows start a temporary HTTP server on `localhost` and wait for the browser to redirect back with an authorization code.
+
+- **Google** normally picks a random port. Inside a container, set the `KUMA_OAUTH_PORT` environment variable to a fixed port number (e.g., `9401`) so Docker can map it to the host. The callback listener binds to `0.0.0.0` when this variable is set.
+- **Microsoft** always uses the fixed port defined in `internal/auth/microsoft.go` (default `8400`). When `KUMA_OAUTH_PORT` is set, the listener binds to `0.0.0.0` instead of loopback so that Docker port mapping works. The redirect URI registered in Azure AD (`http://localhost:8400/callback`) does not change.
+
+Both ports must be published to the host so the browser redirect can reach the container.
+
+### Machine-bound credentials
+
+Credentials are encrypted using the machine's unique ID (see [Credential Storage](#credential-storage) below). A Docker container has a different machine ID from the host, so you cannot share a host's `credentials.enc` directly.
+
+To keep credentials stable across container recreations, generate a fixed machine-id file once and mount it at `/etc/machine-id`:
+
+```bash
+uuidgen | tr '[:upper:]' '[:lower:]' | tr -d '-' > kuma-machine-id
+```
+
+### Example Docker Compose setup
+
+```yaml
+services:
+  my-agent:
+    # ... your agent config ...
+    volumes:
+      - ./kuma-approve-linux:/usr/local/bin/kuma-approve:ro
+      - ./kuma-machine-id:/etc/machine-id:ro
+      - ~/.kuma-approve-docker:/home/agent/.kuma-approve
+    environment:
+      KUMA_OAUTH_PORT: "9401"
+    ports:
+      - 127.0.0.1:9401:9401   # Google OAuth callback
+      - 127.0.0.1:8400:8400   # Microsoft OAuth callback
+```
+
+Cross-compile the binary for Linux before mounting:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o kuma-approve-linux ./cmd/kuma-approve/
+```
+
+Then run setup inside the container once:
+
+```bash
+docker compose exec my-agent kuma-approve setup
+```
+
+Open the OAuth URLs printed by setup in your host browser. The callbacks will redirect to `localhost` and reach the container through the port mappings.
+
 ## Credential Storage
 
 Credentials are stored encrypted at `~/.kuma-approve/credentials.enc` using AES-256-GCM. The encryption key is derived via Argon2id from the machine's unique identifier (`/etc/machine-id` on Linux, `IOPlatformUUID` on macOS).

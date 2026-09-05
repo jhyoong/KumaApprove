@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -132,7 +134,11 @@ func (g *GoogleAuth) RunOAuthFlow(service, account string) error {
 		return fmt.Errorf("unknown service: %s", service)
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listenAddr := "127.0.0.1:0"
+	if p, err := strconv.Atoi(os.Getenv("KUMA_OAUTH_PORT")); err == nil && p > 0 {
+		listenAddr = fmt.Sprintf("0.0.0.0:%d", p)
+	}
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("starting callback server: %w", err)
 	}

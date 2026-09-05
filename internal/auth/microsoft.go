@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -71,8 +72,12 @@ func MicrosoftCallbackRedirectURI() string {
 
 // listenLoopback binds msCallbackPort dual-stack so the callback arrives
 // whether the browser resolves localhost to 127.0.0.1 or ::1, falling back
-// to IPv4-only when IPv6 is unavailable.
+// to IPv4-only when IPv6 is unavailable. When KUMA_OAUTH_PORT is set (container
+// use), it binds 0.0.0.0 so Docker port mapping works.
 func listenLoopback(port int) (net.Listener, error) {
+	if os.Getenv("KUMA_OAUTH_PORT") != "" {
+		return net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	}
 	l, err := net.Listen("tcp", fmt.Sprintf("[::]:%d", port))
 	if err == nil {
 		return l, nil
