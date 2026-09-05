@@ -346,17 +346,25 @@ func closestMatch(input string, candidates []string) string {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, `usage: kuma-approve <service> <action> [flags]
+	fmt.Fprintln(os.Stderr, `kuma-approve -- AI-agent CLI for Gmail, Calendar, and shell with Telegram approval
+
+Usage:
+  kuma-approve <service> <action> [flags]
+  kuma-approve setup
+  kuma-approve auth <service> <account>
 
 Services:
-  gmail       Gmail operations
-  gcal        Google Calendar operations
-  outlook     Outlook email operations
-  msft-cal    Microsoft Calendar operations
-  exec        Shell command execution
-  config      View/edit configuration
-  auth        Manage OAuth authentication
-  setup       First-time setup wizard
+  gmail       Gmail operations (list, get, search, send, reply, draft)
+  gcal        Google Calendar operations (list, get, create, update, delete)
+  outlook     Outlook email operations (list, get, search, send, reply, draft)
+  msft-cal    Microsoft Calendar operations (list, get, create, update, delete)
+  exec        Shell command execution (run)
 
-Run 'kuma-approve <service> --help' for service-specific help.`)
+Examples:
+  kuma-approve gmail list --limit 10
+  kuma-approve gcal create --title "Standup" --start 2026-09-05T09:00:00Z --end 2026-09-05T09:30:00Z
+  kuma-approve exec run --cmd "df -h"
+
+Run 'kuma-approve <service> --help' for actions, parameters, and examples.
+Run 'kuma-approve setup' for first-time configuration.`)
 }
