@@ -100,10 +100,10 @@ func (e *TimeoutError) Error() string {
 
 // ExecResult holds the output of a command execution.
 type ExecResult struct {
-	Stdout    string
-	Stderr    string
-	ExitCode  int
-	Truncated bool
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exit_code"`
+	Truncated bool   `json:"truncated"`
 }
 
 // ExecService implements the service.Service interface for running commands.

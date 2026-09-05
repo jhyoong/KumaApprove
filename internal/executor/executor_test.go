@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -198,6 +199,38 @@ func TestActions(t *testing.T) {
 	}
 	if actions[0].Name != "run" {
 		t.Errorf("expected action name 'run', got %q", actions[0].Name)
+	}
+}
+
+func TestExecResultJSONKeys(t *testing.T) {
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Execute("run", map[string]string{
+		"cmd": "echo hello",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	b, err := json.Marshal(result.Data)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	s := string(b)
+
+	if strings.Contains(s, "Stdout") {
+		t.Errorf("JSON contains capitalized 'Stdout', expected 'stdout': %s", s)
+	}
+	if strings.Contains(s, "ExitCode") {
+		t.Errorf("JSON contains capitalized 'ExitCode', expected 'exit_code': %s", s)
+	}
+	if !strings.Contains(s, `"stdout"`) {
+		t.Errorf("JSON missing 'stdout' key: %s", s)
+	}
+	if !strings.Contains(s, `"exit_code"`) {
+		t.Errorf("JSON missing 'exit_code' key: %s", s)
 	}
 }
 
