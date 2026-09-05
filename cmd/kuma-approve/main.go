@@ -412,8 +412,23 @@ func levenshtein(a, b string) int {
 func closestMatch(input string, candidates []string) string {
 	best := ""
 	bestDist := 3
+	inputLower := strings.ToLower(input)
+
 	for _, c := range candidates {
-		d := levenshtein(strings.ToLower(input), strings.ToLower(c))
+		cLower := strings.ToLower(c)
+
+		d := levenshtein(inputLower, cLower)
+
+		// Prefix match: input is a prefix of candidate or vice versa.
+		// Require at least 3 chars to avoid noisy single/two-letter matches.
+		if len(inputLower) >= 3 && (strings.HasPrefix(cLower, inputLower) || strings.HasPrefix(inputLower, cLower)) {
+			if best == "" || d < bestDist {
+				bestDist = d
+				best = c
+			}
+			continue
+		}
+
 		if d < bestDist {
 			bestDist = d
 			best = c
