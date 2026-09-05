@@ -49,24 +49,7 @@ func main() {
 
 	serviceName := command
 
-	// Check for service-level help before requiring an action.
-	if len(os.Args) >= 3 {
-		arg2 := os.Args[2]
-		if arg2 == "--help" || arg2 == "-h" || arg2 == "help" {
-			printServiceHelp(serviceName)
-			return
-		}
-	}
-
-	if len(os.Args) < 3 {
-		printServiceHelp(serviceName)
-		os.Exit(1)
-	}
-
-	actionName := os.Args[2]
-	args := parseFlags(os.Args[3:])
-
-	// Validate service name early, before loading config.
+	// Validate service name early, before help or action checks.
 	isKnown := false
 	for _, s := range knownServices {
 		if s == serviceName {
@@ -83,6 +66,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Run 'kuma-approve --help' for usage.\n")
 		os.Exit(1)
 	}
+
+	// Check for service-level help before requiring an action.
+	if len(os.Args) >= 3 {
+		arg2 := os.Args[2]
+		if arg2 == "--help" || arg2 == "-h" || arg2 == "help" {
+			printServiceHelp(serviceName)
+			return
+		}
+	}
+
+	if len(os.Args) < 3 {
+		printServiceHelp(serviceName)
+		os.Exit(1)
+	}
+
+	actionName := os.Args[2]
+	args := parseFlags(os.Args[3:])
 
 	// Validate action name early using help-only service instances.
 	var validActions []string
