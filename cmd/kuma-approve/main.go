@@ -368,3 +368,102 @@ Examples:
 Run 'kuma-approve <service> --help' for actions, parameters, and examples.
 Run 'kuma-approve setup' for first-time configuration.`)
 }
+
+var serviceDescriptions = map[string]string{
+	"gmail":    "Gmail operations",
+	"gcal":     "Google Calendar operations",
+	"outlook":  "Outlook email operations",
+	"msft-cal": "Microsoft Calendar operations",
+	"exec":     "Shell command execution",
+}
+
+var serviceExamples = map[string][]string{
+	"gmail": {
+		`kuma-approve gmail list --limit 5`,
+		`kuma-approve gmail search --query "from:boss subject:urgent"`,
+		`kuma-approve gmail send --to user@example.com --subject "Hello" --body "Hi there"`,
+	},
+	"gcal": {
+		`kuma-approve gcal list --date 2026-09-04`,
+		`kuma-approve gcal create --title "Meeting" --start "2026-09-04T10:00:00Z" --end "2026-09-04T11:00:00Z"`,
+		`kuma-approve gcal delete --event-id <id>`,
+	},
+	"outlook": {
+		`kuma-approve outlook list --limit 10`,
+		`kuma-approve outlook search --query "budget report"`,
+		`kuma-approve outlook send --to user@example.com --subject "Hello" --body "Hi there"`,
+	},
+	"msft-cal": {
+		`kuma-approve msft-cal list --date 2026-09-04`,
+		`kuma-approve msft-cal create --subject "Standup" --start "2026-09-04T09:00:00Z" --end "2026-09-04T09:30:00Z"`,
+		`kuma-approve msft-cal delete --event-id <id>`,
+	},
+	"exec": {
+		`kuma-approve exec run --cmd "df -h"`,
+		`kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true`,
+	},
+}
+
+func helpOnlyServices() []service.Service {
+	return []service.Service{
+		gmail.New(nil, ""),
+		gcal.New(nil, ""),
+		outlook.New(nil, ""),
+		msftcal.New(nil, ""),
+	}
+}
+
+func printServiceHelp(serviceName string) {
+	desc := serviceDescriptions[serviceName]
+	if desc == "" {
+		desc = serviceName
+	}
+	fmt.Fprintf(os.Stderr, "%s -- %s\n\nActions:\n", serviceName, desc)
+
+	var actions []service.ActionDefinition
+
+	// Try the help-only services first (no config needed).
+	for _, svc := range helpOnlyServices() {
+		if svc.Name() == serviceName {
+			actions = svc.Actions()
+			break
+		}
+	}
+
+	// Exec is special: needs ExecConfig to construct, but Actions() is still static.
+	if serviceName == "exec" && actions == nil {
+		execSvc, err := executor.New(executor.ExecConfig{})
+		if err == nil {
+			actions = execSvc.Actions()
+		}
+	}
+
+	if actions == nil {
+		fmt.Fprintf(os.Stderr, "  (no actions found)\n")
+		return
+	}
+
+	for _, a := range actions {
+		approvalNote := ""
+		if a.DefaultTier == approval.TierApprove {
+			approvalNote = " (requires approval)"
+		}
+		fmt.Fprintf(os.Stderr, "  %-10s%s%s\n", a.Name, a.Description, approvalNote)
+
+		for _, p := range a.Params {
+			flag := fmt.Sprintf("--%s", p.Name)
+			if !p.Required {
+				flag = fmt.Sprintf("[--%s]", p.Name)
+			}
+			fmt.Fprintf(os.Stderr, "            %-13s%s\n", flag, p.Description)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+
+	if examples, ok := serviceExamples[serviceName]; ok {
+		fmt.Fprintln(os.Stderr, "Examples:")
+		for _, ex := range examples {
+			fmt.Fprintf(os.Stderr, "  %s\n", ex)
+		}
+	}
+}
