@@ -94,13 +94,25 @@ func TestErrorEnvelopeDidYouMeanOmitted(t *testing.T) {
 
 func TestErrorCodes(t *testing.T) {
 	valid := map[string]bool{
+		"UNKNOWN_SERVICE":   true,
+		"UNKNOWN_ACTION":    true,
+		"INVALID_ARGS":      true,
 		"APPROVAL_REJECTED": true,
 		"APPROVAL_TIMEOUT":  true,
-		"AUTH_EXPIRED":      true,
+		"APPROVAL_ERROR":    true,
+		"NO_APPROVER":       true,
 		"DENIED_BY_POLICY":  true,
+		"AUTH_EXPIRED":      true,
 		"EXECUTION_TIMEOUT": true,
 		"API_ERROR":         true,
-		"INVALID_ARGS":      true,
+		"DISPATCH_ERROR":    true,
+		"NO_ACCOUNT":        true,
+		"CONFIG_ERROR":      true,
+		"MACHINE_ID_ERROR":  true,
+		"KEY_ERROR":         true,
+		"CREDSTORE_ERROR":   true,
+		"EXEC_INIT_ERROR":   true,
+		"AUDIT_ERROR":       true,
 	}
 	for code := range valid {
 		env := Fail("test", code, "msg")
