@@ -13,6 +13,16 @@ import (
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
+// RouterError carries a machine-readable error code from the dispatch pipeline.
+type RouterError struct {
+	Code    string
+	Message string
+	Err     error
+}
+
+func (e *RouterError) Error() string { return e.Message }
+func (e *RouterError) Unwrap() error { return e.Err }
+
 // RouterConfig holds the dependencies for the approval-aware Router.
 type RouterConfig struct {
 	Registry       *service.Registry
@@ -46,7 +56,7 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	actionDef, err := r.config.Registry.GetAction(serviceName, actionName)
 	if err != nil {
 		r.logAction(actionKey, account, args, "denied", "failure", "INVALID_ARGS")
-		return nil, err
+		return nil, &RouterError{Code: "INVALID_ARGS", Message: err.Error(), Err: err}
 	}
 
 	// Resolve tier.
@@ -55,14 +65,14 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	// Deny tier.
 	if tier == approval.TierDeny {
 		r.logAction(actionKey, account, args, "denied", "failure", "DENIED_BY_POLICY")
-		return nil, fmt.Errorf("action %s denied by policy", actionKey)
+		return nil, &RouterError{Code: "DENIED_BY_POLICY", Message: fmt.Sprintf("action %s denied by policy", actionKey)}
 	}
 
 	// Approve tier -- requires approver.
 	if tier == approval.TierApprove {
 		if r.config.Approver == nil {
 			r.logAction(actionKey, account, args, "denied", "failure", "NO_APPROVER")
-			return nil, fmt.Errorf("action %s requires approval but no approver configured", actionKey)
+			return nil, &RouterError{Code: "NO_APPROVER", Message: fmt.Sprintf("action %s requires approval but no approver configured", actionKey)}
 		}
 
 		timeout := time.Duration(r.config.TimeoutMinutes) * time.Minute
@@ -80,11 +90,11 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 				errCode = "APPROVAL_TIMEOUT"
 			}
 			r.logAction(actionKey, account, args, "error", "failure", errCode)
-			return nil, fmt.Errorf("approval failed: %w", err)
+			return nil, &RouterError{Code: errCode, Message: fmt.Sprintf("approval failed: %v", err), Err: err}
 		}
 		if !result.Approved {
 			r.logAction(actionKey, account, args, "rejected", "failure", "APPROVAL_REJECTED")
-			return nil, fmt.Errorf("action %s was rejected", actionKey)
+			return nil, &RouterError{Code: "APPROVAL_REJECTED", Message: fmt.Sprintf("action %s was rejected", actionKey)}
 		}
 	}
 
@@ -105,17 +115,17 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 				r.config.Notifier.SendMessage(msg)
 			}
 			r.logAction(actionKey, account, args, status, "failure", "AUTH_EXPIRED")
-			return nil, err
+			return nil, &RouterError{Code: "AUTH_EXPIRED", Message: err.Error(), Err: err}
 		}
 
 		var timeoutErr *executor.TimeoutError
 		if errors.As(err, &timeoutErr) {
 			r.logAction(actionKey, account, args, status, "failure", "EXECUTION_TIMEOUT")
-			return nil, err
+			return nil, &RouterError{Code: "EXECUTION_TIMEOUT", Message: err.Error(), Err: err}
 		}
 
 		r.logAction(actionKey, account, args, status, "failure", "API_ERROR")
-		return nil, err
+		return nil, &RouterError{Code: "API_ERROR", Message: err.Error(), Err: err}
 	}
 
 	status := "auto"

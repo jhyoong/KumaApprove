@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -205,5 +206,137 @@ func TestRouterApproveNoApprover(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no approver configured") {
 		t.Fatalf("expected 'no approver configured' in error, got: %s", err.Error())
+	}
+}
+
+func TestRouterErrorType(t *testing.T) {
+	reg := service.NewRegistry()
+	r := NewRouter(RouterConfig{Registry: reg})
+
+	_, err := r.Dispatch("nonexistent", "list", "", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var re *RouterError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected *RouterError, got %T: %v", err, err)
+	}
+	if re.Code == "" {
+		t.Fatal("expected non-empty error code")
+	}
+}
+
+func TestRouterErrorCodes(t *testing.T) {
+	tests := []struct {
+		name         string
+		service      string
+		action       string
+		args         map[string]string
+		setupReg     func() *service.Registry
+		approver     *fakeApprover
+		tierOverride map[string]string
+		wantCode     string
+	}{
+		{
+			name:    "unknown service",
+			service: "bogus", action: "list",
+			setupReg: func() *service.Registry { return service.NewRegistry() },
+			wantCode: "INVALID_ARGS",
+		},
+		{
+			name:    "unknown action",
+			service: "gmail", action: "bogus",
+			setupReg: func() *service.Registry {
+				reg := service.NewRegistry()
+				reg.Register(&fakeService{
+					name:    "gmail",
+					actions: []service.ActionDefinition{{Name: "list", DefaultTier: "auto"}},
+				})
+				return reg
+			},
+			wantCode: "INVALID_ARGS",
+		},
+		{
+			name:    "denied by policy",
+			service: "gmail", action: "list",
+			setupReg: func() *service.Registry {
+				reg := service.NewRegistry()
+				reg.Register(&fakeService{
+					name:    "gmail",
+					actions: []service.ActionDefinition{{Name: "list", DefaultTier: "auto"}},
+				})
+				return reg
+			},
+			tierOverride: map[string]string{"gmail:list": "deny"},
+			wantCode:     "DENIED_BY_POLICY",
+		},
+		{
+			name:    "no approver configured",
+			service: "gmail", action: "send",
+			setupReg: func() *service.Registry {
+				reg := service.NewRegistry()
+				reg.Register(&fakeService{
+					name:    "gmail",
+					actions: []service.ActionDefinition{{Name: "send", DefaultTier: "approve"}},
+				})
+				return reg
+			},
+			wantCode: "NO_APPROVER",
+		},
+		{
+			name:    "approval rejected",
+			service: "gmail", action: "send",
+			setupReg: func() *service.Registry {
+				reg := service.NewRegistry()
+				reg.Register(&fakeService{
+					name:    "gmail",
+					actions: []service.ActionDefinition{{Name: "send", DefaultTier: "approve"}},
+				})
+				return reg
+			},
+			approver: &fakeApprover{approved: false},
+			wantCode: "APPROVAL_REJECTED",
+		},
+		{
+			name:    "approval error",
+			service: "gmail", action: "send",
+			setupReg: func() *service.Registry {
+				reg := service.NewRegistry()
+				reg.Register(&fakeService{
+					name:    "gmail",
+					actions: []service.ActionDefinition{{Name: "send", DefaultTier: "approve"}},
+				})
+				return reg
+			},
+			approver: &fakeApprover{err: fmt.Errorf("network down")},
+			wantCode: "APPROVAL_ERROR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := RouterConfig{
+				Registry:      tt.setupReg(),
+				TierOverrides: tt.tierOverride,
+			}
+			if tt.approver != nil {
+				cfg.Approver = tt.approver
+			}
+			r := NewRouter(cfg)
+
+			_, err := r.Dispatch(tt.service, tt.action, "user@test.com", tt.args)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+
+			var re *RouterError
+			if !errors.As(err, &re) {
+				t.Fatalf("expected *RouterError, got %T: %v", err, err)
+			}
+			if re.Code != tt.wantCode {
+				t.Fatalf("expected code %s, got %s (msg: %s)", tt.wantCode, re.Code, re.Message)
+			}
+		})
 	}
 }
