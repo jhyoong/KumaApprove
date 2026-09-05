@@ -22,6 +22,8 @@ import (
 	"github.com/jhyoong/KumaApprove/internal/setup"
 )
 
+var knownServices = []string{"gmail", "gcal", "outlook", "msft-cal", "exec"}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -47,13 +49,76 @@ func main() {
 
 	serviceName := command
 
+	// Check for service-level help before requiring an action.
+	if len(os.Args) >= 3 {
+		arg2 := os.Args[2]
+		if arg2 == "--help" || arg2 == "-h" || arg2 == "help" {
+			printServiceHelp(serviceName)
+			return
+		}
+	}
+
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: kuma-approve %s <action> [flags]\n", serviceName)
+		printServiceHelp(serviceName)
 		os.Exit(1)
 	}
 
 	actionName := os.Args[2]
 	args := parseFlags(os.Args[3:])
+
+	// Validate service name early, before loading config.
+	isKnown := false
+	for _, s := range knownServices {
+		if s == serviceName {
+			isKnown = true
+			break
+		}
+	}
+	if !isKnown {
+		fmt.Fprintf(os.Stderr, "Error: unknown service %q\n", serviceName)
+		if suggestion := closestMatch(serviceName, knownServices); suggestion != "" {
+			fmt.Fprintf(os.Stderr, "\nDid you mean %q?\n", suggestion)
+		}
+		fmt.Fprintf(os.Stderr, "\nAvailable services: %s\n", strings.Join(knownServices, ", "))
+		fmt.Fprintf(os.Stderr, "Run 'kuma-approve --help' for usage.\n")
+		os.Exit(1)
+	}
+
+	// Validate action name early using help-only service instances.
+	var validActions []string
+	for _, svc := range helpOnlyServices() {
+		if svc.Name() == serviceName {
+			for _, a := range svc.Actions() {
+				validActions = append(validActions, a.Name)
+			}
+			break
+		}
+	}
+	if serviceName == "exec" && validActions == nil {
+		if execSvc, err := executor.New(executor.ExecConfig{}); err == nil {
+			for _, a := range execSvc.Actions() {
+				validActions = append(validActions, a.Name)
+			}
+		}
+	}
+	if validActions != nil {
+		found := false
+		for _, a := range validActions {
+			if a == actionName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "Error: unknown action %q for service %q\n", actionName, serviceName)
+			if suggestion := closestMatch(actionName, validActions); suggestion != "" {
+				fmt.Fprintf(os.Stderr, "\nDid you mean %q?\n", suggestion)
+			}
+			fmt.Fprintf(os.Stderr, "\nAvailable actions: %s\n", strings.Join(validActions, ", "))
+			fmt.Fprintf(os.Stderr, "Run 'kuma-approve %s --help' for details.\n", serviceName)
+			os.Exit(1)
+		}
+	}
 
 	// Load config.
 	cfg, err := config.Load(config.DefaultPath())
