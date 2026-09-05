@@ -54,6 +54,12 @@ func (t *TelegramApprover) RequestApproval(ctx context.Context, req ApprovalRequ
 		return ApprovalResult{}, fmt.Errorf("sending telegram message: %w", err)
 	}
 
+	defer func() {
+		if ctx.Err() != nil {
+			t.CancelApproval(messageID)
+		}
+	}()
+
 	return t.pollForResponse(ctx, req.RequestID, messageID)
 }
 
@@ -199,6 +205,17 @@ func (t *TelegramApprover) removeKeyboard(messageID int64) {
 	t.apiCall("editMessageReplyMarkup", url.Values{
 		"chat_id":      {t.config.ChatID},
 		"message_id":   {fmt.Sprintf("%d", messageID)},
+		"reply_markup": {`{"inline_keyboard":[]}`},
+	})
+}
+
+// CancelApproval marks a pending approval message as cancelled and removes the keyboard.
+func (t *TelegramApprover) CancelApproval(messageID int64) {
+	t.apiCall("editMessageText", url.Values{
+		"chat_id":      {t.config.ChatID},
+		"message_id":   {fmt.Sprintf("%d", messageID)},
+		"text":         {"[Cancelled] This approval request is no longer active."},
+		"parse_mode":   {"Markdown"},
 		"reply_markup": {`{"inline_keyboard":[]}`},
 	})
 }

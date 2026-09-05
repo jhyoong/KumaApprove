@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,5 +228,99 @@ func TestTelegramTimeout(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+func TestTelegramCancelApproval(t *testing.T) {
+	var mu sync.Mutex
+	var editCalled bool
+	var editText string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch {
+		case r.URL.Path == "/botsecret/editMessageText":
+			editCalled = true
+			r.ParseForm()
+			editText = r.FormValue("text")
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{}})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{}})
+		}
+	}))
+	defer server.Close()
+
+	tg := NewTelegramApprover(TelegramConfig{
+		BotToken: "secret",
+		ChatID:   "123",
+		BaseURL:  server.URL,
+	})
+
+	tg.CancelApproval(42)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !editCalled {
+		t.Fatal("expected editMessageText to be called")
+	}
+	if !strings.Contains(editText, "Cancelled") {
+		t.Fatalf("expected 'Cancelled' in edit text, got: %s", editText)
+	}
+}
+
+func TestTelegramCancelOnContextExit(t *testing.T) {
+	var mu sync.Mutex
+	var editTextCalled bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch {
+		case r.URL.Path == "/botsecret/sendMessage":
+			json.NewEncoder(w).Encode(map[string]any{
+				"ok":     true,
+				"result": map[string]any{"message_id": 99},
+			})
+		case r.URL.Path == "/botsecret/getUpdates":
+			json.NewEncoder(w).Encode(map[string]any{
+				"ok":     true,
+				"result": []any{},
+			})
+		case r.URL.Path == "/botsecret/editMessageText":
+			editTextCalled = true
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{}})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		}
+	}))
+	defer server.Close()
+
+	tg := NewTelegramApprover(TelegramConfig{
+		BotToken:     "secret",
+		ChatID:       "123",
+		BaseURL:      server.URL,
+		PollInterval: 50 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err := tg.RequestApproval(ctx, ApprovalRequest{
+		Action: "gmail:send",
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	// Give a moment for the deferred cancel call to execute.
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !editTextCalled {
+		t.Fatal("expected editMessageText to be called for cancellation")
 	}
 }
