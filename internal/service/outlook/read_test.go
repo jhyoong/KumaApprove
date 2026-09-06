@@ -223,6 +223,71 @@ func TestSearchMessages(t *testing.T) {
 	}
 }
 
+func TestEnrichDetailsReply(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.0/me/messages/msg1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":               "msg1",
+			"subject":          "Project Update",
+			"bodyPreview":      "Here is the latest update on the project status for this quarter.",
+			"receivedDateTime": "2024-01-15T10:00:00Z",
+			"from": map[string]any{
+				"emailAddress": map[string]string{"address": "alice@example.com"},
+			},
+			"toRecipients": []map[string]any{
+				{"emailAddress": map[string]string{"address": "bob@example.com"}},
+			},
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	enriched, err := svc.EnrichDetails("reply", map[string]string{"id": "msg1", "body": "Thanks!"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enriched["original-from"] != "alice@example.com" {
+		t.Errorf("expected original-from=alice@example.com, got %s", enriched["original-from"])
+	}
+	if enriched["original-subject"] != "Project Update" {
+		t.Errorf("expected original-subject=Project Update, got %s", enriched["original-subject"])
+	}
+	if enriched["original-snippet"] == "" {
+		t.Error("expected original-snippet to be set")
+	}
+	if enriched["id"] != "msg1" {
+		t.Errorf("expected original args preserved")
+	}
+}
+
+func TestEnrichDetailsNoOpSend(t *testing.T) {
+	svc := newTestService("http://unused")
+	args := map[string]string{"to": "bob@example.com", "subject": "Hi", "body": "Hello"}
+	enriched, err := svc.EnrichDetails("send", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, exists := enriched["original-from"]; exists {
+		t.Error("expected no enrichment for send action")
+	}
+}
+
+func TestEnrichDetailsReplyAPIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.0/me/messages/msg-gone", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	_, err := svc.EnrichDetails("reply", map[string]string{"id": "msg-gone", "body": "Reply"})
+	if err == nil {
+		t.Fatal("expected error for API failure")
+	}
+}
+
 func TestGetMissingID(t *testing.T) {
 	svc := newTestService("http://unused")
 

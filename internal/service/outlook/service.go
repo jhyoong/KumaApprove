@@ -115,6 +115,34 @@ func (o *OutlookService) Execute(action string, args map[string]string) (*servic
 	}
 }
 
+// EnrichDetails resolves opaque message IDs into human-readable details for approval messages.
+func (o *OutlookService) EnrichDetails(action string, args map[string]string) (map[string]string, error) {
+	if action != "reply" {
+		return args, nil
+	}
+	msgID := args["id"]
+	if msgID == "" {
+		return args, nil
+	}
+	result, err := o.get(map[string]string{"id": msgID})
+	if err != nil {
+		return nil, fmt.Errorf("enriching reply: %w", err)
+	}
+	msg := result.Data.(MessageDetail)
+	enriched := make(map[string]string, len(args)+3)
+	for k, v := range args {
+		enriched[k] = v
+	}
+	enriched["original-from"] = msg.From
+	enriched["original-subject"] = msg.Subject
+	snippet := msg.Snippet
+	if len(snippet) > 100 {
+		snippet = snippet[:100] + "..."
+	}
+	enriched["original-snippet"] = snippet
+	return enriched, nil
+}
+
 // authedRequest creates an HTTP request with the Bearer token header set.
 func (o *OutlookService) authedRequest(method, url string, body io.Reader) (*http.Request, error) {
 	token, err := o.tokenProvider.GetToken("outlook", o.account)
