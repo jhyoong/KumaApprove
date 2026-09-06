@@ -108,6 +108,29 @@ func (c *CalendarService) Execute(action string, args map[string]string) (*servi
 	}
 }
 
+// EnrichDetails resolves opaque event IDs into human-readable details for approval messages.
+func (c *CalendarService) EnrichDetails(action string, args map[string]string) (map[string]string, error) {
+	if action != "delete" && action != "update" {
+		return args, nil
+	}
+	eventID := args["event-id"]
+	if eventID == "" {
+		return args, nil
+	}
+	result, err := c.getEvent(map[string]string{"event-id": eventID})
+	if err != nil {
+		return nil, fmt.Errorf("enriching %s: %w", action, err)
+	}
+	event := result.Data.(EventDetail)
+	enriched := make(map[string]string, len(args)+2)
+	for k, v := range args {
+		enriched[k] = v
+	}
+	enriched["event-title"] = event.Summary
+	enriched["event-time"] = event.Start + " - " + event.End
+	return enriched, nil
+}
+
 // authedRequest creates an HTTP request with the Bearer token header set.
 func (c *CalendarService) authedRequest(method, url string, body io.Reader) (*http.Request, error) {
 	token, err := c.tokenProvider.GetToken("gcal", c.account)
