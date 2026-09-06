@@ -113,6 +113,7 @@ func TestErrorCodes(t *testing.T) {
 		"CREDSTORE_ERROR":   true,
 		"EXEC_INIT_ERROR":   true,
 		"AUDIT_ERROR":       true,
+		"ENRICHMENT_FAILED": true,
 	}
 	for code := range valid {
 		env := Fail("test", code, "msg")
