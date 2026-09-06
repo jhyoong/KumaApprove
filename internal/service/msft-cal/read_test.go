@@ -229,6 +229,62 @@ func TestGetEventMissingID(t *testing.T) {
 	}
 }
 
+func TestEnrichDetailsDelete(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.0/me/events/evt1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "evt1",
+			"subject": "Team Standup",
+			"start":   map[string]string{"dateTime": "2024-01-15T09:00:00", "timeZone": "UTC"},
+			"end":     map[string]string{"dateTime": "2024-01-15T09:30:00", "timeZone": "UTC"},
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	enriched, err := svc.EnrichDetails("delete", map[string]string{"event-id": "evt1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enriched["event-title"] != "Team Standup" {
+		t.Errorf("expected event-title=Team Standup, got %s", enriched["event-title"])
+	}
+	if enriched["event-time"] == "" {
+		t.Error("expected event-time to be set")
+	}
+	if enriched["event-id"] != "evt1" {
+		t.Errorf("expected original args preserved")
+	}
+}
+
+func TestEnrichDetailsNoOp(t *testing.T) {
+	svc := newTestService("http://unused")
+	args := map[string]string{"subject": "New Event", "start": "2024-01-15T09:00:00Z", "end": "2024-01-15T10:00:00Z"}
+	enriched, err := svc.EnrichDetails("create", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, exists := enriched["event-title"]; exists {
+		t.Error("expected no event-title for create action")
+	}
+}
+
+func TestEnrichDetailsAPIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.0/me/events/evt-missing", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	_, err := svc.EnrichDetails("delete", map[string]string{"event-id": "evt-missing"})
+	if err == nil {
+		t.Fatal("expected error for API failure")
+	}
+}
+
 func TestUnknownAction(t *testing.T) {
 	svc := newTestService("http://unused")
 	_, err := svc.Execute("nonexistent", nil)

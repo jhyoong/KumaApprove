@@ -194,6 +194,96 @@ func TestGetMissingEventID(t *testing.T) {
 	}
 }
 
+func TestEnrichDetailsDelete(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/calendar/v3/calendars/primary/events/evt1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "evt1",
+			"summary": "Team Standup",
+			"start":   map[string]string{"dateTime": "2024-01-15T09:00:00Z"},
+			"end":     map[string]string{"dateTime": "2024-01-15T09:30:00Z"},
+			"status":  "confirmed",
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	enriched, err := svc.EnrichDetails("delete", map[string]string{"event-id": "evt1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enriched["event-id"] != "evt1" {
+		t.Errorf("expected event-id preserved, got %s", enriched["event-id"])
+	}
+	if enriched["event-title"] != "Team Standup" {
+		t.Errorf("expected event-title=Team Standup, got %s", enriched["event-title"])
+	}
+	if enriched["event-time"] == "" {
+		t.Error("expected event-time to be set")
+	}
+}
+
+func TestEnrichDetailsUpdate(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/calendar/v3/calendars/primary/events/evt2", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "evt2",
+			"summary": "Weekly Review",
+			"start":   map[string]string{"dateTime": "2024-01-15T14:00:00Z"},
+			"end":     map[string]string{"dateTime": "2024-01-15T15:00:00Z"},
+			"status":  "confirmed",
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	enriched, err := svc.EnrichDetails("update", map[string]string{
+		"event-id": "evt2",
+		"title":    "New Title",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enriched["event-title"] != "Weekly Review" {
+		t.Errorf("expected event-title=Weekly Review, got %s", enriched["event-title"])
+	}
+	if enriched["title"] != "New Title" {
+		t.Errorf("expected original args preserved, got %s", enriched["title"])
+	}
+}
+
+func TestEnrichDetailsNoOp(t *testing.T) {
+	svc := newTestService("http://unused")
+	args := map[string]string{"title": "New Event", "start": "2024-01-15T09:00:00Z", "end": "2024-01-15T10:00:00Z"}
+	enriched, err := svc.EnrichDetails("create", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enriched["title"] != "New Event" {
+		t.Errorf("expected args unchanged, got %v", enriched)
+	}
+	if _, exists := enriched["event-title"]; exists {
+		t.Error("expected no event-title for create action")
+	}
+}
+
+func TestEnrichDetailsAPIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/calendar/v3/calendars/primary/events/evt-missing", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	_, err := svc.EnrichDetails("delete", map[string]string{"event-id": "evt-missing"})
+	if err == nil {
+		t.Fatal("expected error for API failure")
+	}
+}
+
 func TestUnknownAction(t *testing.T) {
 	svc := newTestService("http://unused")
 	_, err := svc.Execute("nonexistent", nil)

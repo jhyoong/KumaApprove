@@ -419,6 +419,164 @@ func TestRouterValidatePassesWithAllParams(t *testing.T) {
 	}
 }
 
+type capturingApprover struct {
+	approved bool
+	capture  *approval.ApprovalRequest
+}
+
+func (c *capturingApprover) RequestApproval(_ context.Context, req approval.ApprovalRequest) (approval.ApprovalResult, error) {
+	*c.capture = req
+	return approval.ApprovalResult{Approved: c.approved, Message: "test"}, nil
+}
+
+type fakeEnricherService struct {
+	fakeService
+	enrichErr    error
+	enrichCalls  int
+	enrichResult map[string]string
+}
+
+func (f *fakeEnricherService) EnrichDetails(action string, args map[string]string) (map[string]string, error) {
+	f.enrichCalls++
+	if f.enrichErr != nil {
+		return nil, f.enrichErr
+	}
+	if f.enrichResult != nil {
+		return f.enrichResult, nil
+	}
+	return args, nil
+}
+
+type failTwiceEnricher struct {
+	fakeService
+	calls int
+}
+
+func (f *failTwiceEnricher) EnrichDetails(action string, args map[string]string) (map[string]string, error) {
+	f.calls++
+	if f.calls <= 2 {
+		return nil, fmt.Errorf("temporary failure")
+	}
+	enriched := make(map[string]string, len(args)+1)
+	for k, v := range args {
+		enriched[k] = v
+	}
+	enriched["event-title"] = "Retried Event"
+	return enriched, nil
+}
+
+func TestRouterEnrichmentPassedToApprover(t *testing.T) {
+	enriched := map[string]string{
+		"event-id":    "evt1",
+		"event-title": "Team Standup",
+		"event-time":  "2024-01-15T09:00:00Z - 2024-01-15T09:30:00Z",
+	}
+	svc := &fakeEnricherService{
+		fakeService: fakeService{
+			name: "gcal",
+			actions: []service.ActionDefinition{
+				{Name: "delete", DefaultTier: "approve", Params: []service.ParamDef{
+					{Name: "event-id", Required: true},
+				}},
+			},
+		},
+		enrichResult: enriched,
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	var captured approval.ApprovalRequest
+	approver := &capturingApprover{approved: true, capture: &captured}
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+		Approver: approver,
+	})
+
+	_, err := r.Dispatch("gcal", "delete", "user@test.com", map[string]string{"event-id": "evt1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.Details["event-title"] != "Team Standup" {
+		t.Fatalf("expected enriched details passed to approver, got: %v", captured.Details)
+	}
+	if svc.enrichCalls != 1 {
+		t.Fatalf("expected 1 enrich call, got %d", svc.enrichCalls)
+	}
+}
+
+func TestRouterEnrichmentFailureBlocks(t *testing.T) {
+	svc := &fakeEnricherService{
+		fakeService: fakeService{
+			name: "gcal",
+			actions: []service.ActionDefinition{
+				{Name: "delete", DefaultTier: "approve", Params: []service.ParamDef{
+					{Name: "event-id", Required: true},
+				}},
+			},
+		},
+		enrichErr: fmt.Errorf("API unreachable"),
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	approver := &fakeApprover{approved: true}
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+		Approver: approver,
+	})
+
+	_, err := r.Dispatch("gcal", "delete", "user@test.com", map[string]string{"event-id": "evt1"})
+	if err == nil {
+		t.Fatal("expected error for enrichment failure")
+	}
+
+	var re *RouterError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected *RouterError, got %T", err)
+	}
+	if re.Code != "ENRICHMENT_FAILED" {
+		t.Fatalf("expected ENRICHMENT_FAILED, got %s", re.Code)
+	}
+	if svc.enrichCalls != 3 {
+		t.Fatalf("expected 3 retry attempts, got %d", svc.enrichCalls)
+	}
+	if approver.called {
+		t.Fatal("approver should NOT be called when enrichment fails")
+	}
+}
+
+func TestRouterEnrichmentRetrySucceeds(t *testing.T) {
+	svc := &failTwiceEnricher{
+		fakeService: fakeService{
+			name: "gcal",
+			actions: []service.ActionDefinition{
+				{Name: "delete", DefaultTier: "approve", Params: []service.ParamDef{
+					{Name: "event-id", Required: true},
+				}},
+			},
+		},
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+
+	approver := &fakeApprover{approved: true}
+	r := NewRouter(RouterConfig{
+		Registry: reg,
+		Approver: approver,
+	})
+
+	_, err := r.Dispatch("gcal", "delete", "user@test.com", map[string]string{"event-id": "evt1"})
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if !approver.called {
+		t.Fatal("expected approver to be called after successful retry")
+	}
+	if svc.calls != 3 {
+		t.Fatalf("expected 3 calls (2 failures + 1 success), got %d", svc.calls)
+	}
+}
+
 func TestRouterValidateOptionalParamsNotRequired(t *testing.T) {
 	svc := &fakeService{
 		name: "gmail",

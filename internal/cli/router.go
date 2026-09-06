@@ -88,6 +88,31 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		return nil, &RouterError{Code: "DENIED_BY_POLICY", Message: fmt.Sprintf("action %s denied by policy", actionKey)}
 	}
 
+	// Fetch service instance (needed for enrichment and execution).
+	svc := r.config.Registry.Get(serviceName)
+
+	// Enrich details for approval message if the service supports it.
+	details := args
+	if tier == approval.TierApprove {
+		if enricher, ok := svc.(service.Enricher); ok {
+			var enrichErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				details, enrichErr = enricher.EnrichDetails(actionName, args)
+				if enrichErr == nil {
+					break
+				}
+			}
+			if enrichErr != nil {
+				r.logAction(actionKey, account, args, "denied", "failure", "ENRICHMENT_FAILED")
+				return nil, &RouterError{
+					Code:    "ENRICHMENT_FAILED",
+					Message: fmt.Sprintf("failed to resolve details for %s: %v", actionKey, enrichErr),
+					Err:     enrichErr,
+				}
+			}
+		}
+	}
+
 	// Approve tier -- requires approver.
 	if tier == approval.TierApprove {
 		if r.config.Approver == nil {
@@ -102,7 +127,7 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		result, err := r.config.Approver.RequestApproval(ctx, approval.ApprovalRequest{
 			Action:  actionKey,
 			Account: account,
-			Details: args,
+			Details: details,
 		})
 		if err != nil {
 			errCode := "APPROVAL_ERROR"
@@ -119,7 +144,6 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	}
 
 	// Execute the action.
-	svc := r.config.Registry.Get(serviceName)
 	svcResult, err := svc.Execute(actionName, args)
 	if err != nil {
 		status := "auto"

@@ -243,3 +243,69 @@ func TestUnknownAction(t *testing.T) {
 		t.Fatal("expected error for unknown action")
 	}
 }
+
+func TestEnrichDetailsReply(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/msg1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "msg1",
+			"snippet": "Hey, can we meet tomorrow to discuss the project?",
+			"payload": map[string]any{
+				"headers": []map[string]string{
+					{"name": "From", "value": "alice@example.com"},
+					{"name": "Subject", "value": "Meeting tomorrow"},
+				},
+			},
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	enriched, err := svc.EnrichDetails("reply", map[string]string{"id": "msg1", "body": "Sure!"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enriched["id"] != "msg1" {
+		t.Errorf("expected original args preserved")
+	}
+	if enriched["body"] != "Sure!" {
+		t.Errorf("expected body preserved")
+	}
+	if enriched["original-from"] != "alice@example.com" {
+		t.Errorf("expected original-from=alice@example.com, got %s", enriched["original-from"])
+	}
+	if enriched["original-subject"] != "Meeting tomorrow" {
+		t.Errorf("expected original-subject=Meeting tomorrow, got %s", enriched["original-subject"])
+	}
+	if enriched["original-snippet"] == "" {
+		t.Error("expected original-snippet to be set")
+	}
+}
+
+func TestEnrichDetailsNoOpSend(t *testing.T) {
+	svc := newTestService("http://unused")
+	args := map[string]string{"to": "bob@example.com", "subject": "Hi", "body": "Hello"}
+	enriched, err := svc.EnrichDetails("send", args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, exists := enriched["original-from"]; exists {
+		t.Error("expected no enrichment for send action")
+	}
+}
+
+func TestEnrichDetailsReplyAPIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/msg-gone", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	_, err := svc.EnrichDetails("reply", map[string]string{"id": "msg-gone", "body": "Reply"})
+	if err == nil {
+		t.Fatal("expected error for API failure")
+	}
+}
