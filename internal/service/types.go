@@ -27,3 +27,9 @@ type ParamDef struct {
 type Result struct {
 	Data any
 }
+
+// Enricher is an optional interface that services can implement to resolve
+// opaque resource IDs into human-readable details for approval messages.
+type Enricher interface {
+	EnrichDetails(action string, args map[string]string) (map[string]string, error)
+}
