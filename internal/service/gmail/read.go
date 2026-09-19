@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jhyoong/KumaApprove/internal/htmlutil"
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
@@ -23,13 +24,14 @@ type MessageSummary struct {
 
 // MessageDetail holds the full content of a Gmail message.
 type MessageDetail struct {
-	ID      string `json:"id"`
-	From    string `json:"from"`
-	To      string `json:"to"`
-	Subject string `json:"subject"`
-	Date    string `json:"date"`
-	Snippet string `json:"snippet"`
-	Body    string `json:"body"`
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Subject  string `json:"subject"`
+	Date     string `json:"date"`
+	Snippet  string `json:"snippet"`
+	Body     string `json:"body"`
+	BodyHTML string `json:"bodyHtml,omitempty"`
 }
 
 // gmailListResponse represents the Gmail API list messages response.
@@ -40,24 +42,30 @@ type gmailListResponse struct {
 	} `json:"messages"`
 }
 
+// gmailPart represents a single MIME part of a Gmail message, which may
+// itself contain nested parts (e.g. multipart/alternative inside multipart/mixed).
+type gmailPart struct {
+	MimeType string `json:"mimeType"`
+	Body     struct {
+		Data string `json:"data"`
+	} `json:"body"`
+	Parts []gmailPart `json:"parts"`
+}
+
 // gmailMessage represents a single Gmail API message response.
 type gmailMessage struct {
 	ID      string `json:"id"`
 	Snippet string `json:"snippet"`
 	Payload struct {
-		Headers []struct {
+		MimeType string `json:"mimeType"`
+		Headers  []struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`
 		} `json:"headers"`
 		Body struct {
 			Data string `json:"data"`
 		} `json:"body"`
-		Parts []struct {
-			MimeType string `json:"mimeType"`
-			Body     struct {
-				Data string `json:"data"`
-			} `json:"body"`
-		} `json:"parts"`
+		Parts []gmailPart `json:"parts"`
 	} `json:"payload"`
 }
 
@@ -233,14 +241,16 @@ func (g *GmailService) fetchFullMessage(id string) (MessageDetail, error) {
 		return MessageDetail{}, fmt.Errorf("decoding message %s: %w", id, err)
 	}
 
+	plain, htmlBody := extractBodies(msg)
 	return MessageDetail{
-		ID:      msg.ID,
-		From:    getHeader(msg, "From"),
-		To:      getHeader(msg, "To"),
-		Subject: getHeader(msg, "Subject"),
-		Date:    getHeader(msg, "Date"),
-		Snippet: msg.Snippet,
-		Body:    extractBody(msg),
+		ID:       msg.ID,
+		From:     getHeader(msg, "From"),
+		To:       getHeader(msg, "To"),
+		Subject:  getHeader(msg, "Subject"),
+		Date:     getHeader(msg, "Date"),
+		Snippet:  msg.Snippet,
+		Body:     plain,
+		BodyHTML: htmlBody,
 	}, nil
 }
 
@@ -254,26 +264,62 @@ func getHeader(msg gmailMessage, name string) string {
 	return ""
 }
 
-// extractBody extracts the plain text body from a Gmail message.
+// extractBodies extracts the plain text and HTML bodies from a Gmail message.
 // Gmail uses URL-safe base64 encoding, sometimes without padding.
-func extractBody(msg gmailMessage) string {
-	// Try parts first (multipart messages).
-	for _, part := range msg.Payload.Parts {
-		if part.MimeType == "text/plain" && part.Body.Data != "" {
-			if decoded, err := decodeBase64URL(part.Body.Data); err == nil {
-				return decoded
+func extractBodies(msg gmailMessage) (plain, htmlBody string) {
+	plain, htmlBody = findBodies(msg.Payload.Parts)
+
+	if plain == "" && htmlBody == "" && msg.Payload.Body.Data != "" {
+		decoded, err := decodeBase64URL(msg.Payload.Body.Data)
+		if err == nil {
+			if msg.Payload.MimeType == "text/html" {
+				htmlBody = decoded
+			} else {
+				plain = decoded
 			}
 		}
 	}
 
-	// Fall back to payload body (simple messages).
-	if msg.Payload.Body.Data != "" {
-		if decoded, err := decodeBase64URL(msg.Payload.Body.Data); err == nil {
-			return decoded
-		}
+	if plain == "" && htmlBody != "" {
+		plain = htmlutil.StripTags(htmlBody)
 	}
 
-	return ""
+	return plain, htmlBody
+}
+
+// findBodies recursively searches MIME parts for text/plain and text/html bodies.
+func findBodies(parts []gmailPart) (plain, htmlBody string) {
+	for _, part := range parts {
+		if len(part.Parts) > 0 {
+			p, h := findBodies(part.Parts)
+			if plain == "" {
+				plain = p
+			}
+			if htmlBody == "" {
+				htmlBody = h
+			}
+		}
+
+		if part.Body.Data == "" {
+			continue
+		}
+		decoded, err := decodeBase64URL(part.Body.Data)
+		if err != nil {
+			continue
+		}
+
+		switch part.MimeType {
+		case "text/plain":
+			if plain == "" {
+				plain = decoded
+			}
+		case "text/html":
+			if htmlBody == "" {
+				htmlBody = decoded
+			}
+		}
+	}
+	return plain, htmlBody
 }
 
 // decodeBase64URL decodes a URL-safe base64 string, handling missing padding.
