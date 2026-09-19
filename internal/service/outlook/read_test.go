@@ -131,8 +131,9 @@ func TestGetMessage(t *testing.T) {
 					},
 				},
 			},
-			"body": map[string]string{
-				"content": "Hello World",
+			"body": map[string]any{
+				"contentType": "text",
+				"content":     "Hello World",
 			},
 		})
 	})
@@ -306,5 +307,83 @@ func TestUnknownAction(t *testing.T) {
 	_, err := svc.Execute("nonexistent", map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for unknown action")
+	}
+}
+
+func TestGetMessageHTMLBody(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.0/me/messages/html1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":               "html1",
+			"subject":          "HTML Email",
+			"receivedDateTime": "2024-01-01T12:00:00Z",
+			"bodyPreview":      "Hello World",
+			"isRead":           true,
+			"from": map[string]any{
+				"emailAddress": map[string]string{"address": "alice@example.com"},
+			},
+			"toRecipients": []map[string]any{
+				{"emailAddress": map[string]string{"address": "bob@example.com"}},
+			},
+			"body": map[string]any{
+				"contentType": "html",
+				"content":     "<p>Hello World</p>",
+			},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	result, err := svc.Execute("get", map[string]string{"id": "html1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result.Data.(MessageDetail)
+	if msg.Body != "Hello World" {
+		t.Errorf("expected Body='Hello World', got %q", msg.Body)
+	}
+	if msg.BodyHTML != "<p>Hello World</p>" {
+		t.Errorf("expected BodyHTML='<p>Hello World</p>', got %q", msg.BodyHTML)
+	}
+}
+
+func TestGetMessageTextBody(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.0/me/messages/text1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":               "text1",
+			"subject":          "Plain Email",
+			"receivedDateTime": "2024-01-01T12:00:00Z",
+			"bodyPreview":      "Just text",
+			"isRead":           true,
+			"from": map[string]any{
+				"emailAddress": map[string]string{"address": "alice@example.com"},
+			},
+			"toRecipients": []map[string]any{
+				{"emailAddress": map[string]string{"address": "bob@example.com"}},
+			},
+			"body": map[string]any{
+				"contentType": "text",
+				"content":     "Just plain text",
+			},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	result, err := svc.Execute("get", map[string]string{"id": "text1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result.Data.(MessageDetail)
+	if msg.Body != "Just plain text" {
+		t.Errorf("expected Body='Just plain text', got %q", msg.Body)
+	}
+	if msg.BodyHTML != "" {
+		t.Errorf("expected BodyHTML='', got %q", msg.BodyHTML)
 	}
 }
