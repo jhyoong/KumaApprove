@@ -1,6 +1,7 @@
 package gmail
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,10 @@ func newTestService(serverURL string) *GmailService {
 		baseURL:       serverURL,
 		httpClient:    http.DefaultClient,
 	}
+}
+
+func b64(s string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
 }
 
 func TestListMessages(t *testing.T) {
@@ -307,5 +312,179 @@ func TestEnrichDetailsReplyAPIError(t *testing.T) {
 	_, err := svc.EnrichDetails("reply", map[string]string{"id": "msg-gone", "body": "Reply"})
 	if err == nil {
 		t.Fatal("expected error for API failure")
+	}
+}
+
+func TestGetMessageHTMLOnly(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/html1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "html1",
+			"snippet": "Hello from HTML",
+			"payload": map[string]any{
+				"mimeType": "text/html",
+				"headers": []map[string]string{
+					{"name": "From", "value": "alice@example.com"},
+					{"name": "To", "value": "bob@example.com"},
+					{"name": "Subject", "value": "HTML Only"},
+					{"name": "Date", "value": "Mon, 1 Jan 2024 12:00:00 +0000"},
+				},
+				"body": map[string]string{
+					"data": b64("<p>Hello World</p>"),
+				},
+			},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	result, err := svc.Execute("get", map[string]string{"id": "html1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result.Data.(MessageDetail)
+	if msg.Body != "Hello World" {
+		t.Errorf("expected Body='Hello World', got %q", msg.Body)
+	}
+	if msg.BodyHTML != "<p>Hello World</p>" {
+		t.Errorf("expected BodyHTML='<p>Hello World</p>', got %q", msg.BodyHTML)
+	}
+}
+
+func TestGetMessageMultipartHTMLOnly(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/mhtml1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "mhtml1",
+			"snippet": "Multipart HTML",
+			"payload": map[string]any{
+				"mimeType": "multipart/alternative",
+				"headers": []map[string]string{
+					{"name": "From", "value": "alice@example.com"},
+					{"name": "To", "value": "bob@example.com"},
+					{"name": "Subject", "value": "Multipart HTML Only"},
+					{"name": "Date", "value": "Mon, 1 Jan 2024 12:00:00 +0000"},
+				},
+				"body": map[string]string{"data": ""},
+				"parts": []map[string]any{
+					{
+						"mimeType": "text/html",
+						"body":     map[string]string{"data": b64("<div>HTML only</div>")},
+					},
+				},
+			},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	result, err := svc.Execute("get", map[string]string{"id": "mhtml1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result.Data.(MessageDetail)
+	if msg.Body != "HTML only" {
+		t.Errorf("expected Body='HTML only', got %q", msg.Body)
+	}
+	if msg.BodyHTML != "<div>HTML only</div>" {
+		t.Errorf("expected BodyHTML='<div>HTML only</div>', got %q", msg.BodyHTML)
+	}
+}
+
+func TestGetMessageNestedParts(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/nested1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "nested1",
+			"snippet": "Nested",
+			"payload": map[string]any{
+				"mimeType": "multipart/mixed",
+				"headers": []map[string]string{
+					{"name": "From", "value": "alice@example.com"},
+					{"name": "To", "value": "bob@example.com"},
+					{"name": "Subject", "value": "Nested Parts"},
+					{"name": "Date", "value": "Mon, 1 Jan 2024 12:00:00 +0000"},
+				},
+				"body": map[string]string{"data": ""},
+				"parts": []map[string]any{
+					{
+						"mimeType": "multipart/alternative",
+						"body":     map[string]string{"data": ""},
+						"parts": []map[string]any{
+							{
+								"mimeType": "text/html",
+								"body":     map[string]string{"data": b64("<b>Nested HTML</b>")},
+							},
+						},
+					},
+				},
+			},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	result, err := svc.Execute("get", map[string]string{"id": "nested1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result.Data.(MessageDetail)
+	if msg.Body != "Nested HTML" {
+		t.Errorf("expected Body='Nested HTML', got %q", msg.Body)
+	}
+	if msg.BodyHTML != "<b>Nested HTML</b>" {
+		t.Errorf("expected BodyHTML='<b>Nested HTML</b>', got %q", msg.BodyHTML)
+	}
+}
+
+func TestGetMessageBothParts(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/both1", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "both1",
+			"snippet": "Both parts",
+			"payload": map[string]any{
+				"mimeType": "multipart/alternative",
+				"headers": []map[string]string{
+					{"name": "From", "value": "alice@example.com"},
+					{"name": "To", "value": "bob@example.com"},
+					{"name": "Subject", "value": "Both Parts"},
+					{"name": "Date", "value": "Mon, 1 Jan 2024 12:00:00 +0000"},
+				},
+				"body": map[string]string{"data": ""},
+				"parts": []map[string]any{
+					{
+						"mimeType": "text/plain",
+						"body":     map[string]string{"data": b64("Plain version")},
+					},
+					{
+						"mimeType": "text/html",
+						"body":     map[string]string{"data": b64("<p>HTML version</p>")},
+					},
+				},
+			},
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	svc := newTestService(ts.URL)
+	result, err := svc.Execute("get", map[string]string{"id": "both1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result.Data.(MessageDetail)
+	if msg.Body != "Plain version" {
+		t.Errorf("expected Body='Plain version', got %q", msg.Body)
+	}
+	if msg.BodyHTML != "<p>HTML version</p>" {
+		t.Errorf("expected BodyHTML='<p>HTML version</p>', got %q", msg.BodyHTML)
 	}
 }
