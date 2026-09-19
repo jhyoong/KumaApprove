@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
+	"github.com/jhyoong/KumaApprove/internal/htmlutil"
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
@@ -22,13 +24,14 @@ type MessageSummary struct {
 
 // MessageDetail holds the full content of an Outlook message.
 type MessageDetail struct {
-	ID      string `json:"id"`
-	From    string `json:"from"`
-	To      string `json:"to"`
-	Subject string `json:"subject"`
-	Date    string `json:"date"`
-	Snippet string `json:"snippet"`
-	Body    string `json:"body"`
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Subject  string `json:"subject"`
+	Date     string `json:"date"`
+	Snippet  string `json:"snippet"`
+	Body     string `json:"body"`
+	BodyHTML string `json:"bodyHtml,omitempty"`
 }
 
 // graphMessageListResponse represents the Microsoft Graph list messages response.
@@ -54,7 +57,8 @@ type graphMessage struct {
 		} `json:"emailAddress"`
 	} `json:"toRecipients"`
 	Body struct {
-		Content string `json:"content"`
+		ContentType string `json:"contentType"`
+		Content     string `json:"content"`
 	} `json:"body"`
 }
 
@@ -132,14 +136,22 @@ func (o *OutlookService) get(args map[string]string) (*service.Result, error) {
 		to = msg.ToRecipients[0].EmailAddress.Address
 	}
 
+	body := msg.Body.Content
+	bodyHTML := ""
+	if strings.EqualFold(msg.Body.ContentType, "html") || msg.Body.ContentType == "" {
+		bodyHTML = body
+		body = htmlutil.StripTags(body)
+	}
+
 	return &service.Result{Data: MessageDetail{
-		ID:      msg.ID,
-		From:    msg.From.EmailAddress.Address,
-		To:      to,
-		Subject: msg.Subject,
-		Date:    msg.ReceivedDateTime,
-		Snippet: msg.BodyPreview,
-		Body:    msg.Body.Content,
+		ID:       msg.ID,
+		From:     msg.From.EmailAddress.Address,
+		To:       to,
+		Subject:  msg.Subject,
+		Date:     msg.ReceivedDateTime,
+		Snippet:  msg.BodyPreview,
+		Body:     body,
+		BodyHTML: bodyHTML,
 	}}, nil
 }
 
