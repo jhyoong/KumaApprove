@@ -36,6 +36,7 @@ type ExecConfig struct {
 type GoogleOAuthConfig struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
+	RelayURL     string `json:"relay_url"`
 }
 
 // MicrosoftOAuthConfig holds Microsoft/Azure AD OAuth client credentials.

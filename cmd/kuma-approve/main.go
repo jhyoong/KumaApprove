@@ -175,6 +175,7 @@ func main() {
 	gauth := &auth.GoogleAuth{
 		ClientID:     cfg.GoogleOAuth.ClientID,
 		ClientSecret: cfg.GoogleOAuth.ClientSecret,
+		RelayURL:     cfg.GoogleOAuth.RelayURL,
 		Store:        store,
 	}
 
@@ -352,6 +353,7 @@ func runAuth(args []string) {
 		gauth := &auth.GoogleAuth{
 			ClientID:     cfg.GoogleOAuth.ClientID,
 			ClientSecret: cfg.GoogleOAuth.ClientSecret,
+			RelayURL:     cfg.GoogleOAuth.RelayURL,
 			Store:        store,
 		}
 		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
@@ -453,12 +455,18 @@ Services:
   exec        Shell command execution (run)
 
 Token Re-Auth:
-  When a Google token expires mid-operation, the CLI automatically starts the
-  OAuth device authorization flow (RFC 8628). It prints a verification URL and
-  user code to stderr with the [AUTH_DEVICE_FLOW] prefix, then polls until the
-  user approves on any device. The original operation retries on success.
+  When a Google token expires mid-operation, the CLI tries these flows in order:
 
-  Requires "TVs and Limited Input devices" enabled in Google Cloud Console.
+  1. Device flow (gcal only): prints a verification URL and user code to stderr
+     with the [AUTH_DEVICE_FLOW] prefix. Requires "TVs and Limited Input devices"
+     enabled in Google Cloud Console.
+
+  2. Relay flow (all services, if relay_url is configured): prints an auth URL to
+     stderr with the [AUTH_RELAY] prefix. The user authorizes from any device
+     (phone, laptop), and the relay forwards the code back to the CLI.
+     Set relay_url in config or during setup. Run kuma-relay on a reachable host.
+
+  3. Browser OAuth (local fallback): opens a browser for direct authorization.
 
 Examples:
   kuma-approve gmail list --limit 10

@@ -76,6 +76,7 @@ func validateGoogle(cfg config.Config, store auth.CredentialStore, tokenURL stri
 	gauth := &auth.GoogleAuth{
 		ClientID:     cfg.GoogleOAuth.ClientID,
 		ClientSecret: cfg.GoogleOAuth.ClientSecret,
+		RelayURL:     cfg.GoogleOAuth.RelayURL,
 		TokenURL:     tokenURL,
 		Store:        store,
 	}
@@ -257,6 +258,12 @@ func Run() {
 		cfg.GoogleOAuth.ClientID = clientID
 		cfg.GoogleOAuth.ClientSecret = clientSecret
 
+		relayURL := readLine(reader, "    OAuth relay URL (optional, press Enter to skip): ")
+		if relayURL != "" {
+			cfg.GoogleOAuth.RelayURL = relayURL
+			fmt.Printf("    Note: add %s/callback as an authorized redirect URI in Google Cloud Console.\n", strings.TrimRight(relayURL, "/"))
+		}
+
 		account := readLine(reader, "    Google account email: ")
 		cfg.Accounts["gmail"] = []string{account}
 		cfg.Accounts["gcal"] = []string{account}
@@ -269,6 +276,7 @@ func Run() {
 		gauth := &auth.GoogleAuth{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
+			RelayURL:     cfg.GoogleOAuth.RelayURL,
 			Store:        store,
 		}
 
@@ -388,6 +396,7 @@ func RunAuth(serviceName, account string) {
 		gauth := &auth.GoogleAuth{
 			ClientID:     cfg.GoogleOAuth.ClientID,
 			ClientSecret: cfg.GoogleOAuth.ClientSecret,
+			RelayURL:     cfg.GoogleOAuth.RelayURL,
 			Store:        store,
 		}
 		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)

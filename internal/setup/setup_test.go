@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +183,15 @@ func TestValidateGoogleExpiredToken(t *testing.T) {
 		})
 	}))
 	defer server.Close()
+
+	blocker, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockerPort := blocker.Addr().(*net.TCPAddr).Port
+	defer blocker.Close()
+	os.Setenv("KUMA_OAUTH_PORT", strconv.Itoa(blockerPort))
+	defer os.Unsetenv("KUMA_OAUTH_PORT")
 
 	store := newFakeStore()
 	store.Put("gmail:user@gmail.com", credstore.Credential{
