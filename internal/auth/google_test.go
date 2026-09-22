@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -289,5 +290,113 @@ func TestPollDeviceTokenSlowDown(t *testing.T) {
 	}
 	if token != "token-after-slowdown" {
 		t.Fatalf("expected token-after-slowdown, got %s", token)
+	}
+}
+
+func TestGetTokenFallsBackToDeviceFlow(t *testing.T) {
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		grantType := r.FormValue("grant_type")
+		if grantType == "refresh_token" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":             "invalid_grant",
+				"error_description": "Token has been expired or revoked.",
+			})
+			return
+		}
+		if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "device-flow-token",
+				"refresh_token": "device-flow-refresh",
+				"expires_in":    3600,
+			})
+			return
+		}
+		t.Fatalf("unexpected grant_type: %s", grantType)
+	}))
+	defer refreshServer.Close()
+
+	deviceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"device_code":      "test-device-code",
+			"user_code":        "TEST-CODE",
+			"verification_url": "https://www.google.com/device",
+			"expires_in":       30,
+			"interval":         1,
+		})
+	}))
+	defer deviceServer.Close()
+
+	store := newFakeStore()
+	store.Put("gmail:test@gmail.com", credstore.Credential{
+		AccessToken:  "expired-token",
+		RefreshToken: "revoked-refresh-token",
+		Expiry:       time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+	})
+
+	provider := &GoogleAuth{
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		TokenURL:      refreshServer.URL,
+		DeviceCodeURL: deviceServer.URL,
+		Store:         store,
+	}
+
+	token, err := provider.GetToken("gmail", "test@gmail.com")
+	if err != nil {
+		t.Fatalf("expected device flow fallback to succeed, got: %v", err)
+	}
+	if token != "device-flow-token" {
+		t.Fatalf("expected device-flow-token, got %s", token)
+	}
+
+	updated, _ := store.Get("gmail:test@gmail.com")
+	if updated.RefreshToken != "device-flow-refresh" {
+		t.Fatal("store should have the new refresh token from device flow")
+	}
+}
+
+func TestGetTokenDeviceFlowAlsoFails(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":             "invalid_grant",
+			"error_description": "Token has been expired or revoked.",
+		})
+	}))
+	defer tokenServer.Close()
+
+	deviceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"device_code":      "test-device-code",
+			"user_code":        "TEST-CODE",
+			"verification_url": "https://www.google.com/device",
+			"expires_in":       2,
+			"interval":         1,
+		})
+	}))
+	defer deviceServer.Close()
+
+	store := newFakeStore()
+	store.Put("gmail:test@gmail.com", credstore.Credential{
+		AccessToken:  "expired-token",
+		RefreshToken: "revoked-refresh-token",
+		Expiry:       time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+	})
+
+	provider := &GoogleAuth{
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		TokenURL:      tokenServer.URL,
+		DeviceCodeURL: deviceServer.URL,
+		Store:         store,
+	}
+
+	_, err := provider.GetToken("gmail", "test@gmail.com")
+	if err == nil {
+		t.Fatal("expected AuthExpiredError when both refresh and device flow fail")
+	}
+
+	var authErr *AuthExpiredError
+	if !errors.As(err, &authErr) {
+		t.Fatalf("expected AuthExpiredError, got %T: %v", err, err)
 	}
 }

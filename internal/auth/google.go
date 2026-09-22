@@ -78,7 +78,11 @@ func (g *GoogleAuth) GetToken(service, account string) (string, error) {
 
 	newToken, newExpiry, err := g.refreshToken(cred.RefreshToken)
 	if err != nil {
-		return "", &AuthExpiredError{Service: service, Account: account, Err: err}
+		token, deviceErr := g.runDeviceFlow(service, account)
+		if deviceErr != nil {
+			return "", &AuthExpiredError{Service: service, Account: account, Err: fmt.Errorf("refresh failed: %w; device flow failed: %w", err, deviceErr)}
+		}
+		return token, nil
 	}
 
 	cred.AccessToken = newToken
@@ -219,6 +223,36 @@ func (g *GoogleAuth) pollDeviceToken(deviceCode string, interval, expiresIn int)
 			return "", "", "", fmt.Errorf("device flow error: %s", result.Error)
 		}
 	}
+}
+
+func (g *GoogleAuth) runDeviceFlow(service, account string) (string, error) {
+	resp, err := g.requestDeviceCode(service)
+	if err != nil {
+		return "", err
+	}
+	if resp.DeviceCode == "" {
+		return "", fmt.Errorf("empty device code in response")
+	}
+
+	fmt.Fprintf(os.Stderr, "[AUTH_DEVICE_FLOW] Verification URL: %s\n", resp.VerificationURL)
+	fmt.Fprintf(os.Stderr, "[AUTH_DEVICE_FLOW] User Code: %s\n", resp.UserCode)
+	fmt.Fprintf(os.Stderr, "[AUTH_DEVICE_FLOW] Waiting for approval (expires in %ds)...\n", resp.ExpiresIn)
+
+	token, refresh, expiry, err := g.pollDeviceToken(resp.DeviceCode, resp.Interval, resp.ExpiresIn)
+	if err != nil {
+		return "", err
+	}
+
+	key := service + ":" + account
+	if err := g.Store.Put(key, credstore.Credential{
+		AccessToken:  token,
+		RefreshToken: refresh,
+		Expiry:       expiry,
+	}); err != nil {
+		return "", fmt.Errorf("saving device flow token: %w", err)
+	}
+
+	return token, nil
 }
 
 // RunOAuthFlow starts the interactive browser-based OAuth2 flow for the
