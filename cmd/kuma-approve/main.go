@@ -452,6 +452,14 @@ Services:
   msft-cal    Microsoft Calendar operations (list, get, create, update, delete)
   exec        Shell command execution (run)
 
+Token Re-Auth:
+  When a Google token expires mid-operation, the CLI automatically starts the
+  OAuth device authorization flow (RFC 8628). It prints a verification URL and
+  user code to stderr with the [AUTH_DEVICE_FLOW] prefix, then polls until the
+  user approves on any device. The original operation retries on success.
+
+  Requires "TVs and Limited Input devices" enabled in Google Cloud Console.
+
 Examples:
   kuma-approve gmail list --limit 10
   kuma-approve gcal create --title "Standup" --start 2026-09-05T09:00:00Z --end 2026-09-05T09:30:00Z
