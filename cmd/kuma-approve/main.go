@@ -457,16 +457,12 @@ Services:
 Token Re-Auth:
   When a Google token expires mid-operation, the CLI tries these flows in order:
 
-  1. Device flow (gcal only): prints a verification URL and user code to stderr
-     with the [AUTH_DEVICE_FLOW] prefix. Requires "TVs and Limited Input devices"
-     enabled in Google Cloud Console.
-
-  2. Relay flow (all services, if relay_url is configured): prints an auth URL to
+  1. Relay flow (all services, if relay_url is configured): prints an auth URL to
      stderr with the [AUTH_RELAY] prefix. The user authorizes from any device
      (phone, laptop), and the relay forwards the code back to the CLI.
-     Set relay_url in config or during setup. Run kuma-relay on a reachable host.
+     Set relay_url in config or during setup. See docs/relay-setup-guide.md.
 
-  3. Browser OAuth (local fallback): opens a browser for direct authorization.
+  2. Browser OAuth (local fallback): opens a browser for direct authorization.
 
 Examples:
   kuma-approve gmail list --limit 10
