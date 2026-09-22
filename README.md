@@ -17,7 +17,8 @@ Agents invoke KumaApprove as a subprocess, receive structured JSON on stdout, an
 1. Create a Google Cloud project (free, no billing required).
 2. Enable the Gmail API and Google Calendar API.
 3. Create an OAuth 2.0 Client ID (Application type: Desktop).
-4. Set the OAuth consent screen to "Production" (unverified). Users see a one-time "This app isn't verified" warning during initial auth. This avoids the 7-day refresh token expiry that "Testing" mode enforces.
+4. Under the same client ID, enable "TVs and Limited Input devices" to allow the automatic device authorization flow when tokens expire (see [Token Refresh](#token-refresh)).
+5. Set the OAuth consent screen to "Production" (unverified). Users see a one-time "This app isn't verified" warning during initial auth. This avoids the 7-day refresh token expiry that "Testing" mode enforces.
 
 ### Microsoft OAuth setup (optional)
 
@@ -303,7 +304,21 @@ Credentials are stored encrypted at `~/.kuma-approve/credentials.enc` using AES-
 
 ## Token Refresh
 
-Access tokens are refreshed automatically before each API call when they are near expiry. If a refresh fails (e.g. the token has been revoked), the CLI returns an `AUTH_EXPIRED` error and sends a Telegram notification with re-authorization instructions.
+Access tokens are refreshed automatically before each API call when they are near expiry. If a refresh fails (e.g. the token has been revoked or the project is in "Testing" mode with 7-day expiry), the CLI automatically starts the OAuth device authorization flow (RFC 8628). This prints a verification URL and user code to stderr:
+
+```
+[AUTH_DEVICE_FLOW] Verification URL: https://www.google.com/device
+[AUTH_DEVICE_FLOW] User Code: ABCD-EFGH
+[AUTH_DEVICE_FLOW] Waiting for approval (expires in 300s)...
+```
+
+The user visits the URL on any device (phone, tablet, another computer), enters the code, and approves. The CLI polls until approval is received, stores the new tokens, and retries the original operation. If the device flow also fails or times out, the CLI returns `AUTH_EXPIRED`.
+
+The `[AUTH_DEVICE_FLOW]` prefix on stderr is a stable tag that AI agents can detect and relay to the user.
+
+### Device flow prerequisites
+
+Enable "TVs and Limited Input devices" as an application type for your OAuth client in the Google Cloud Console. This is a one-time setup step alongside the existing Desktop client type.
 
 ## Audit Log
 
