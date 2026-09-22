@@ -164,6 +164,63 @@ func (g *GoogleAuth) requestDeviceCode(service string) (deviceCodeResponse, erro
 	return result, nil
 }
 
+func (g *GoogleAuth) pollDeviceToken(deviceCode string, interval, expiresIn int) (string, string, string, error) {
+	tokenURL := g.TokenURL
+	if tokenURL == "" {
+		tokenURL = "https://oauth2.googleapis.com/token"
+	}
+
+	if interval < 1 {
+		interval = 5
+	}
+
+	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	for {
+		if time.Now().After(deadline) {
+			return "", "", "", fmt.Errorf("device flow timed out")
+		}
+
+		time.Sleep(time.Duration(interval) * time.Second)
+
+		params := url.Values{
+			"client_id":     {g.ClientID},
+			"client_secret": {g.ClientSecret},
+			"device_code":   {deviceCode},
+			"grant_type":    {"urn:ietf:params:oauth:grant-type:device_code"},
+		}
+
+		resp, err := http.PostForm(tokenURL, params)
+		if err != nil {
+			return "", "", "", err
+		}
+
+		var result struct {
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
+			ExpiresIn    int    `json:"expires_in"`
+			Error        string `json:"error"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+
+		switch result.Error {
+		case "":
+			expiry := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second).Format(time.RFC3339)
+			return result.AccessToken, result.RefreshToken, expiry, nil
+		case "authorization_pending":
+			continue
+		case "slow_down":
+			interval += 5
+			continue
+		case "access_denied":
+			return "", "", "", fmt.Errorf("user denied access")
+		default:
+			return "", "", "", fmt.Errorf("device flow error: %s", result.Error)
+		}
+	}
+}
+
 // RunOAuthFlow starts the interactive browser-based OAuth2 flow for the
 // given service and account. It opens a browser, waits for the callback,
 // exchanges the authorization code for tokens, and stores them.

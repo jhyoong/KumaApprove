@@ -183,3 +183,111 @@ func TestRequestDeviceCodeUnknownService(t *testing.T) {
 		t.Fatal("expected error for unknown service")
 	}
 }
+
+func TestPollDeviceTokenSuccess(t *testing.T) {
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" {
+			t.Fatalf("unexpected grant_type: %s", r.FormValue("grant_type"))
+		}
+		if r.FormValue("device_code") != "device-code-123" {
+			t.Fatalf("unexpected device_code: %s", r.FormValue("device_code"))
+		}
+
+		attempt++
+		if attempt < 3 {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "authorization_pending",
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "device-access-token",
+			"refresh_token": "device-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer server.Close()
+
+	provider := &GoogleAuth{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		TokenURL:     server.URL,
+	}
+
+	token, refresh, expiry, err := provider.pollDeviceToken("device-code-123", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "device-access-token" {
+		t.Fatalf("expected device-access-token, got %s", token)
+	}
+	if refresh != "device-refresh-token" {
+		t.Fatalf("expected device-refresh-token, got %s", refresh)
+	}
+	if expiry == "" {
+		t.Fatal("expected non-empty expiry")
+	}
+}
+
+func TestPollDeviceTokenDenied(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "access_denied",
+		})
+	}))
+	defer server.Close()
+
+	provider := &GoogleAuth{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		TokenURL:     server.URL,
+	}
+
+	_, _, _, err := provider.pollDeviceToken("device-code-123", 1, 10)
+	if err == nil {
+		t.Fatal("expected error for access denied")
+	}
+	if err.Error() != "user denied access" {
+		t.Fatalf("expected 'user denied access', got %q", err.Error())
+	}
+}
+
+func TestPollDeviceTokenSlowDown(t *testing.T) {
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		if attempt == 1 {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": "slow_down",
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "token-after-slowdown",
+			"refresh_token": "refresh-after-slowdown",
+			"expires_in":    3600,
+		})
+	}))
+	defer server.Close()
+
+	provider := &GoogleAuth{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		TokenURL:     server.URL,
+	}
+
+	token, _, _, err := provider.pollDeviceToken("device-code-123", 1, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "token-after-slowdown" {
+		t.Fatalf("expected token-after-slowdown, got %s", token)
+	}
+}
