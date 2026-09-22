@@ -100,3 +100,86 @@ func TestGetTokenStillValid(t *testing.T) {
 		t.Fatalf("expected valid-token, got %s", token)
 	}
 }
+
+func TestRequestDeviceCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.FormValue("client_id") != "client-id" {
+			t.Fatalf("expected client_id=client-id, got %s", r.FormValue("client_id"))
+		}
+		if r.FormValue("scope") == "" {
+			t.Fatal("expected non-empty scope")
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"device_code":      "device-code-123",
+			"user_code":        "ABCD-EFGH",
+			"verification_url": "https://www.google.com/device",
+			"expires_in":       300,
+			"interval":         5,
+		})
+	}))
+	defer server.Close()
+
+	provider := &GoogleAuth{
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		DeviceCodeURL: server.URL,
+	}
+
+	resp, err := provider.requestDeviceCode("gmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.DeviceCode != "device-code-123" {
+		t.Fatalf("expected device-code-123, got %s", resp.DeviceCode)
+	}
+	if resp.UserCode != "ABCD-EFGH" {
+		t.Fatalf("expected ABCD-EFGH, got %s", resp.UserCode)
+	}
+	if resp.VerificationURL != "https://www.google.com/device" {
+		t.Fatalf("expected verification URL, got %s", resp.VerificationURL)
+	}
+	if resp.ExpiresIn != 300 {
+		t.Fatalf("expected 300, got %d", resp.ExpiresIn)
+	}
+	if resp.Interval != 5 {
+		t.Fatalf("expected 5, got %d", resp.Interval)
+	}
+}
+
+func TestRequestDeviceCodeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": "access_denied",
+		})
+	}))
+	defer server.Close()
+
+	provider := &GoogleAuth{
+		ClientID:      "client-id",
+		DeviceCodeURL: server.URL,
+	}
+
+	resp, err := provider.requestDeviceCode("gmail")
+	if err != nil {
+		t.Fatal("expected no transport error")
+	}
+	if resp.DeviceCode != "" {
+		t.Fatalf("expected empty device code, got %s", resp.DeviceCode)
+	}
+}
+
+func TestRequestDeviceCodeUnknownService(t *testing.T) {
+	provider := &GoogleAuth{ClientID: "client-id"}
+
+	_, err := provider.requestDeviceCode("unknown-service")
+	if err == nil {
+		t.Fatal("expected error for unknown service")
+	}
+}

@@ -43,10 +43,11 @@ func (e *AuthExpiredError) Unwrap() error {
 // GoogleAuth handles Google OAuth2 token retrieval, refresh, and the
 // interactive browser-based authorization flow.
 type GoogleAuth struct {
-	ClientID     string
-	ClientSecret string
-	TokenURL     string
-	Store        CredentialStore
+	ClientID      string
+	ClientSecret  string
+	TokenURL      string
+	DeviceCodeURL string
+	Store         CredentialStore
 }
 
 var defaultScopes = map[string][]string{
@@ -123,6 +124,44 @@ func (g *GoogleAuth) refreshToken(refreshToken string) (string, string, error) {
 
 	expiry := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second).Format(time.RFC3339)
 	return result.AccessToken, expiry, nil
+}
+
+type deviceCodeResponse struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURL string `json:"verification_url"`
+	ExpiresIn       int    `json:"expires_in"`
+	Interval        int    `json:"interval"`
+}
+
+func (g *GoogleAuth) requestDeviceCode(service string) (deviceCodeResponse, error) {
+	scopes, ok := defaultScopes[service]
+	if !ok {
+		return deviceCodeResponse{}, fmt.Errorf("unknown service: %s", service)
+	}
+
+	deviceCodeURL := g.DeviceCodeURL
+	if deviceCodeURL == "" {
+		deviceCodeURL = "https://oauth2.googleapis.com/device/code"
+	}
+
+	params := url.Values{
+		"client_id": {g.ClientID},
+		"scope":     {strings.Join(scopes, " ")},
+	}
+
+	resp, err := http.PostForm(deviceCodeURL, params)
+	if err != nil {
+		return deviceCodeResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	var result deviceCodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return deviceCodeResponse{}, err
+	}
+
+	return result, nil
 }
 
 // RunOAuthFlow starts the interactive browser-based OAuth2 flow for the
