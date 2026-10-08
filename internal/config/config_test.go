@@ -55,6 +55,9 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestConfigDir(t *testing.T) {
+	if IsRoot() {
+		t.Skip("root uses the fixed RootDir")
+	}
 	t.Setenv("HOME", "/tmp/testhome")
 	dir := Dir()
 	if dir != "/tmp/testhome/.kuma-approve" {
@@ -157,4 +160,17 @@ func TestVerifyOwnedBy(t *testing.T) {
 			t.Fatal("expected a missing config to be rejected")
 		}
 	})
+}
+
+func TestDirIgnoresHomeAsRoot(t *testing.T) {
+	if !IsRoot() {
+		t.Skip("requires root")
+	}
+	t.Setenv("HOME", "/tmp/testhome")
+	if dir := Dir(); dir != RootDir {
+		t.Fatalf("expected %s as root regardless of HOME, got %s", RootDir, dir)
+	}
+	if wd := Default().Exec.WorkingDirectory; wd != "/root" {
+		t.Fatalf("expected root working directory /root, got %s", wd)
+	}
 }

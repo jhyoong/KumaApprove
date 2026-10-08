@@ -66,6 +66,8 @@ The wizard will:
 7. Open a browser for Google Calendar OAuth authorization.
 8. Send a test Telegram message to confirm the bot works.
 
+To let agents run approved commands as root, there is a separate root-mode setup (`sudo kuma-approve setup`); see [Root commands](#root-commands).
+
 ## Usage
 
 ```
@@ -119,15 +121,17 @@ kuma-approve gcal delete --event-id <id>
 ### Command Execution
 
 ```bash
-# Run a command (safe-listed commands auto-approve)
+# Run a command (requires Telegram approval)
 kuma-approve exec run --cmd "df -h"
 
-# Shell mode for pipes and redirects (always requires approval)
+# Shell mode for pipes and redirects
 kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true
 
 # Override the default timeout (seconds, max 3600)
 kuma-approve exec run --cmd "make build" --timeout 300
 ```
+
+Every `exec` command requires approval unless you set `exec:run` to `auto` in `approval.tiers`. Only `--cmd`, `--shell` and `--timeout` are accepted; any other flag is rejected with `INVALID_ARGS`.
 
 A command that runs but exits non-zero still returns `success: true` with `data.exit_code` set; the audit log records it as a failure (`NONZERO_EXIT`). Deny-listed commands and bad parameters are rejected before any approval is requested.
 
@@ -196,11 +200,11 @@ Every action has a default approval tier that can be overridden in the config fi
 
 | Tier | Behaviour | Examples |
 |---|---|---|
-| **auto** | Executes immediately | Read emails, list calendar events, safe-listed shell commands |
-| **approve** | Blocks until Telegram approval or timeout | Send email, create/modify/delete events, non-safe-listed commands |
-| **deny** | Rejected outright | Commands matching deny-list patterns (`sudo`, `rm -rf`, etc.) |
+| **auto** | Executes immediately | Read emails, list calendar events |
+| **approve** | Blocks until Telegram approval or timeout | Send email, create/modify/delete events, shell commands |
+| **deny** | Rejected outright, before any approval is requested | Commands matching deny-list patterns (`sudo`, `rm -rf`, etc.) |
 
-Using `--shell true` automatically bumps any command to the "approve" tier.
+When run as root, every action is forced to the "approve" tier (or denied); nothing can be `auto`. See [Root commands](#root-commands).
 
 ## Output Format
 
@@ -229,7 +233,7 @@ Errors:
 }
 ```
 
-Error codes: `APPROVAL_REJECTED`, `APPROVAL_TIMEOUT`, `AUTH_EXPIRED`, `DENIED_BY_POLICY`, `EXECUTION_TIMEOUT`, `API_ERROR`, `INVALID_ARGS`, `ROOT_EXEC_ONLY`.
+Error codes: `APPROVAL_REJECTED`, `APPROVAL_TIMEOUT`, `AUTH_EXPIRED`, `DENIED_BY_POLICY`, `EXECUTION_TIMEOUT`, `API_ERROR`, `INVALID_ARGS`, `NO_APPROVER`, `CONFIG_ERROR`, `ROOT_EXEC_ONLY`.
 
 ## Configuration
 
@@ -284,7 +288,9 @@ Config file: `~/.kuma-approve/config.json`
 
 `microsoft_oauth` and the `outlook`/`msft-cal` account entries are optional. Omit them (or leave `microsoft_oauth.client_id` empty) and the Outlook/Calendar services are not registered, so `kuma-approve outlook ...` fails with `unknown service`. `tenant_id` defaults to `consumers` (personal Microsoft accounts); use `common` or a specific tenant GUID for work/school accounts.
 
-Override any action's tier in the `tiers` map. Add commands to `safe_list` to auto-approve them, or add regex patterns to `deny_list_patterns` to block them entirely.
+Override any action's tier in the `tiers` map. Add regex patterns to `deny_list_patterns` to block commands entirely. `safe_list` is not currently applied: listing a command there does not make it auto-approve.
+
+Root mode has its own config at `/etc/kuma-approve/config.json`, written by `sudo kuma-approve setup`. It uses the same format, but only `telegram`, `approval.timeout_minutes` and `exec` are used, the working directory defaults to `/root`, and `approval.tiers` cannot make a command skip approval.
 
 ## Docker / Container Usage
 
@@ -365,4 +371,4 @@ The `[AUTH_RELAY]` prefix on stderr is a stable tag that AI agents can detect an
 
 ## Audit Log
 
-Every CLI invocation is logged to `~/.kuma-approve/audit.log` as newline-delimited JSON. Each entry records the timestamp, action, account, parameters (sanitised), approval status, result, and error code. Email bodies are truncated to 200 characters in the log.
+Every CLI invocation is logged to `~/.kuma-approve/audit.log` (`/etc/kuma-approve/audit.log` in root mode) as newline-delimited JSON. Each entry records the timestamp, action, account, parameters (sanitised), approval status, result, and error code. Email bodies are truncated to 200 characters in the log.

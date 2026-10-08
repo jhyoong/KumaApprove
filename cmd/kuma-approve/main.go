@@ -486,13 +486,15 @@ Usage:
   kuma-approve <service> <action> [flags]
   kuma-approve setup
   kuma-approve auth <service> <account>
+  sudo kuma-approve setup                       (configure root mode)
+  sudo -n kuma-approve exec run --cmd "..."     (run a command as root)
 
 Services:
   gmail       Gmail operations (list, get, search, send, reply, draft)
   gcal        Google Calendar operations (list, get, create, update, delete)
   outlook     Outlook email operations (list, get, search, send, reply, draft)
   msft-cal    Microsoft Calendar operations (list, get, create, update, delete)
-  exec        Shell command execution (run)
+  exec        Shell command execution (run); every command needs approval
 
 Token Re-Auth:
   When a Google token expires mid-operation, the CLI tries these flows in order:
@@ -520,7 +522,8 @@ Running commands as root:
   asks for Telegram approval. One-time install: see "Root commands" in README.md.
 
 Run 'kuma-approve <service> --help' for actions, parameters, and examples.
-Run 'kuma-approve setup' for first-time configuration.`)
+Run 'kuma-approve setup' for first-time configuration.
+Run 'sudo kuma-approve setup' to configure root mode (needs its own Telegram bot).`)
 }
 
 var serviceDescriptions = map[string]string{

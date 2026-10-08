@@ -737,3 +737,36 @@ func TestRouterAuditsNonZeroExit(t *testing.T) {
 		t.Fatalf("expected a NONZERO_EXIT failure in the audit log, got %s", logged)
 	}
 }
+
+type recordingApprover struct {
+	req approval.ApprovalRequest
+}
+
+func (a *recordingApprover) RequestApproval(_ context.Context, req approval.ApprovalRequest) (approval.ApprovalResult, error) {
+	a.req = req
+	return approval.ApprovalResult{Approved: true}, nil
+}
+
+func TestRouterFlagsPrivilegedRequests(t *testing.T) {
+	for _, privileged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("privileged=%v", privileged), func(t *testing.T) {
+			reg := service.NewRegistry()
+			reg.Register(&fakeService{
+				name:    "exec",
+				actions: []service.ActionDefinition{{Name: "run", DefaultTier: "approve"}},
+			})
+			approver := &recordingApprover{}
+
+			r := NewRouter(RouterConfig{Registry: reg, Approver: approver, Privileged: privileged})
+			if _, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "id"}); err != nil {
+				t.Fatal(err)
+			}
+			if approver.req.Privileged != privileged {
+				t.Errorf("approval request Privileged = %v, want %v", approver.req.Privileged, privileged)
+			}
+			if approver.req.Details["cmd"] != "id" {
+				t.Errorf("expected the command in the approval details, got %v", approver.req.Details)
+			}
+		})
+	}
+}

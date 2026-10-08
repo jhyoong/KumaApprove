@@ -187,7 +187,13 @@ func invokingUserBotToken() string {
 	if err != nil {
 		return ""
 	}
-	cfg, err := config.Load(filepath.Join(u.HomeDir, ".kuma-approve", "config.json"))
+	return botTokenInHome(u.HomeDir)
+}
+
+// botTokenInHome returns the Telegram bot token from the user-level config
+// under homeDir, or "" if there is none.
+func botTokenInHome(homeDir string) string {
+	cfg, err := config.Load(filepath.Join(homeDir, ".kuma-approve", "config.json"))
 	if err != nil {
 		return ""
 	}
