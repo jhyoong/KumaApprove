@@ -45,10 +45,15 @@ func main() {
 
 	if command == "auth" {
 		if config.IsRoot() {
-			fmt.Fprintln(os.Stderr, "auth is not available as root; root mode only supports 'setup' and 'exec'")
+			fmt.Fprintln(os.Stderr, "auth is not available as root; root mode only supports 'setup', 'trace' and 'exec'")
 			os.Exit(1)
 		}
 		runAuth(os.Args[2:])
+		return
+	}
+
+	if command == "trace" {
+		runTrace(os.Args[2:])
 		return
 	}
 
@@ -254,6 +259,7 @@ func main() {
 	// Create Telegram approver if configured.
 	var approver approval.Approver
 	var notifier approval.Notifier
+	var tracer approval.Tracer
 	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 		tg := approval.NewTelegramApprover(approval.TelegramConfig{
 			BotToken: cfg.Telegram.BotToken,
@@ -261,6 +267,9 @@ func main() {
 		})
 		approver = tg
 		notifier = tg
+		if cfg.Approval.Trace {
+			tracer = tg
+		}
 		gauth.Notify = tg.SendPlainText
 	}
 
@@ -281,6 +290,7 @@ func main() {
 		Registry:       registry,
 		Approver:       approver,
 		Notifier:       notifier,
+		Tracer:         tracer,
 		TierOverrides:  cfg.Approval.Tiers,
 		Logger:         logger,
 		TimeoutMinutes: cfg.Approval.TimeoutMinutes,
@@ -332,6 +342,61 @@ func resolveAccount(args map[string]string, cfg config.Config, serviceName, acti
 
 func runSetup() {
 	setup.Run()
+}
+
+// applyTrace updates cfg for a `trace on|off|status` argument.
+func applyTrace(cfg *config.Config, arg string) error {
+	switch arg {
+	case "on":
+		cfg.Approval.Trace = true
+	case "off":
+		cfg.Approval.Trace = false
+	case "status":
+	default:
+		return fmt.Errorf("usage: kuma-approve trace on|off|status")
+	}
+	return nil
+}
+
+// runTrace toggles or reports the trace setting in the config for the
+// current user (the root config when run under sudo).
+func runTrace(args []string) {
+	arg := "status"
+	if len(args) > 0 {
+		arg = args[0]
+	}
+	action := "trace:" + arg
+
+	path := config.DefaultPath()
+	if config.IsRoot() {
+		if err := config.VerifyRootOwned(path); err != nil {
+			output.PrintAndExit(output.Fail(action, "CONFIG_ERROR",
+				fmt.Sprintf("refusing to use an untrusted config as root: %v (run 'sudo kuma-approve setup')", err)))
+			return
+		}
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		output.PrintAndExit(output.Fail(action, "CONFIG_ERROR", fmt.Sprintf("failed to load config: %v", err)))
+		return
+	}
+
+	was := cfg.Approval.Trace
+	if err := applyTrace(&cfg, arg); err != nil {
+		output.PrintAndExit(output.Fail(action, "INVALID_ARGS", err.Error()))
+		return
+	}
+	if cfg.Approval.Trace != was {
+		if err := config.Save(cfg, path); err != nil {
+			output.PrintAndExit(output.Fail(action, "CONFIG_ERROR", fmt.Sprintf("failed to save config: %v", err)))
+			return
+		}
+	}
+
+	output.PrintAndExit(output.Success(action, map[string]any{
+		"trace":  cfg.Approval.Trace,
+		"config": path,
+	}))
 }
 
 func runAuth(args []string) {
@@ -486,6 +551,7 @@ Usage:
   kuma-approve <service> <action> [flags]
   kuma-approve setup
   kuma-approve auth <service> <account>
+  kuma-approve trace on|off|status              (send every approval/denial outcome to Telegram)
   sudo kuma-approve setup                       (configure root mode)
   sudo -n kuma-approve exec run --cmd "..."     (run a command as root)
 
@@ -520,6 +586,11 @@ Running commands as root:
   sudo -n kuma-approve exec run --cmd "systemctl restart nginx"
   The whole CLI runs as root, uses /etc/kuma-approve/config.json, and always
   asks for Telegram approval. One-time install: see "Root commands" in README.md.
+
+Traces:
+  'kuma-approve trace on' sends a timestamped line to the Telegram chat for every
+  approved, rejected, denied or failed request. Run it with sudo to toggle traces
+  for root mode, which has its own config and bot.
 
 Run 'kuma-approve <service> --help' for actions, parameters, and examples.
 Run 'kuma-approve setup' for first-time configuration.

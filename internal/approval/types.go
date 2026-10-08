@@ -29,6 +29,12 @@ type Approver interface {
 	RequestApproval(ctx context.Context, req ApprovalRequest) (ApprovalResult, error)
 }
 
+// Tracer receives one event per approval or denial outcome when tracing is
+// enabled. Events are sent verbatim, with no markup interpretation.
+type Tracer interface {
+	SendTrace(text string) error
+}
+
 // Notifier sends plain text notifications (e.g. auth expiry alerts).
 type Notifier interface {
 	SendMessage(text string) error

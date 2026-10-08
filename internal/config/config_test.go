@@ -174,3 +174,23 @@ func TestDirIgnoresHomeAsRoot(t *testing.T) {
 		t.Fatalf("expected root working directory /root, got %s", wd)
 	}
 }
+
+func TestTraceRoundTrip(t *testing.T) {
+	if Default().Approval.Trace {
+		t.Fatal("expected trace to be off by default")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Approval.Trace = true
+	if err := Save(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Approval.Trace {
+		t.Fatal("expected trace setting to survive save and load")
+	}
+}

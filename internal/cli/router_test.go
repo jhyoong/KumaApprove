@@ -770,3 +770,119 @@ func TestRouterFlagsPrivilegedRequests(t *testing.T) {
 		})
 	}
 }
+
+type recordingTracer struct {
+	events []string
+	err    error
+}
+
+func (r *recordingTracer) SendTrace(text string) error {
+	r.events = append(r.events, text)
+	return r.err
+}
+
+func TestRouterTrace(t *testing.T) {
+	tests := []struct {
+		name      string
+		tier      string
+		approver  *fakeApprover
+		validate  error
+		wantEvent []string // substrings of the single expected event; nil means no event
+	}{
+		{name: "auto success is not traced", tier: "auto"},
+		{name: "approved", tier: "approve", approver: &fakeApprover{approved: true},
+			wantEvent: []string{"exec:run: approved, success", "cmd: id_x"}},
+		{name: "rejected", tier: "approve", approver: &fakeApprover{approved: false},
+			wantEvent: []string{"exec:run: rejected, failure (APPROVAL_REJECTED)", "cmd: id_x"}},
+		{name: "approval error", tier: "approve", approver: &fakeApprover{err: fmt.Errorf("network down")},
+			wantEvent: []string{"exec:run: error, failure (APPROVAL_ERROR)"}},
+		{name: "denied by tier", tier: "deny",
+			wantEvent: []string{"exec:run: denied, failure (DENIED_BY_POLICY)"}},
+		{name: "denied by deny list", tier: "approve", approver: &fakeApprover{approved: true},
+			validate:  &executor.DeniedError{Cmd: "id_x"},
+			wantEvent: []string{"exec:run: denied, failure (DENIED_BY_POLICY)", "cmd: id_x"}},
+		{name: "no approver", tier: "approve",
+			wantEvent: []string{"exec:run: denied, failure (NO_APPROVER)"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := service.NewRegistry()
+			reg.Register(&validatingService{
+				fakeService: fakeService{
+					name:    "exec",
+					actions: []service.ActionDefinition{{Name: "run", DefaultTier: tt.tier}},
+				},
+				err: tt.validate,
+			})
+			tracer := &recordingTracer{}
+			cfg := RouterConfig{Registry: reg, Tracer: tracer}
+			if tt.approver != nil {
+				cfg.Approver = tt.approver
+			}
+
+			NewRouter(cfg).Dispatch("exec", "run", "", map[string]string{"cmd": "id_x"})
+
+			if tt.wantEvent == nil {
+				if len(tracer.events) != 0 {
+					t.Fatalf("expected no trace, got %q", tracer.events)
+				}
+				return
+			}
+			if len(tracer.events) != 1 {
+				t.Fatalf("expected exactly one trace event, got %q", tracer.events)
+			}
+			event := tracer.events[0]
+			if !strings.HasPrefix(event, "[trace] 20") || !strings.Contains(event, " UTC\n") {
+				t.Errorf("expected a leading UTC timestamp, got %q", event)
+			}
+			for _, want := range tt.wantEvent {
+				if !strings.Contains(event, want) {
+					t.Errorf("expected %q in trace, got %q", want, event)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterTraceMarksRootAndTruncates(t *testing.T) {
+	reg := service.NewRegistry()
+	reg.Register(&fakeService{
+		name:    "exec",
+		actions: []service.ActionDefinition{{Name: "run", DefaultTier: "approve"}},
+	})
+	tracer := &recordingTracer{}
+	r := NewRouter(RouterConfig{Registry: reg, Tracer: tracer, Approver: &fakeApprover{approved: true}, Privileged: true})
+
+	if _, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": strings.Repeat("a", 1000)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tracer.events) != 1 {
+		t.Fatalf("expected one trace event, got %d", len(tracer.events))
+	}
+	event := tracer.events[0]
+	if !strings.Contains(event, "exec:run (root): approved, success") {
+		t.Errorf("expected the trace to be marked as root, got %q", event)
+	}
+	if !strings.Contains(event, strings.Repeat("a", maxTraceParamLen)+"...") || strings.Contains(event, strings.Repeat("a", maxTraceParamLen+1)) {
+		t.Errorf("expected the command to be cut at %d characters, got %q", maxTraceParamLen, event)
+	}
+}
+
+func TestRouterTraceFailureDoesNotAffectAction(t *testing.T) {
+	svc := &fakeService{
+		name:    "exec",
+		actions: []service.ActionDefinition{{Name: "run", DefaultTier: "approve"}},
+	}
+	reg := service.NewRegistry()
+	reg.Register(svc)
+	tracer := &recordingTracer{err: fmt.Errorf("telegram down")}
+	r := NewRouter(RouterConfig{Registry: reg, Tracer: tracer, Approver: &fakeApprover{approved: true}})
+
+	if _, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "id"}); err != nil {
+		t.Fatalf("a failing tracer must not fail the action: %v", err)
+	}
+	if svc.called != "run" {
+		t.Fatal("expected the action to run")
+	}
+}

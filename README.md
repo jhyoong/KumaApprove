@@ -149,7 +149,7 @@ The approval gate then runs as root, where the calling agent cannot tamper with 
 - Config, audit log and bot token live in `/etc/kuma-approve/` (never `$HOME`). The CLI refuses to run unless the config and its directory are root-owned and not accessible to anyone else.
 - Every command requires Telegram approval. Tier overrides and the safe list cannot make a root command auto-run.
 - The approval message is marked as root and shows the complete command, untruncated.
-- Only `exec` and `setup` are available.
+- Only `exec`, `setup` and `trace` are available.
 
 One-time install:
 
@@ -170,6 +170,26 @@ sudo visudo -cf /etc/sudoers.d/kuma-approve
 Use a **separate Telegram bot** for root mode, with its token stored only in `/etc/kuma-approve/config.json`. A process that can read a bot token can send you messages with working Approve buttons, so a token shared with `~/.kuma-approve/config.json` would let an unprivileged agent disguise a root request. `setup` refuses a token that matches the invoking user's config.
 
 Never grant the sudoers rule to a copy of the binary that a non-root user can write to.
+
+### Traces
+
+Turn on traces to get a timestamped line in the Telegram chat for every request that was approved, rejected, denied by policy, refused for bad arguments, timed out, or failed:
+
+```bash
+kuma-approve trace on       # enable
+kuma-approve trace off      # disable
+kuma-approve trace status   # show the current setting
+```
+
+```
+[trace] 2026-10-08 12:46:08 UTC
+exec:run: denied, failure (DENIED_BY_POLICY)
+cmd: sudo ls /root
+```
+
+Auto-tier actions that succeed (for example `gmail list`) are not traced, so routine reads do not flood the chat; they are still in the audit log. Traces are sent as plain text, with each parameter value cut at 300 characters.
+
+The setting is stored as `approval.trace` in the config. Root mode has its own config and bot, so toggle it separately with `sudo kuma-approve trace on`; root traces are marked `(root)`. That command is not covered by the passwordless sudoers rule, so an agent cannot switch root traces off.
 
 ### Authentication
 
@@ -247,6 +267,7 @@ Config file: `~/.kuma-approve/config.json`
   },
   "approval": {
     "timeout_minutes": 240,
+    "trace": false,
     "tiers": {
       "gmail:list": "auto",
       "gmail:get": "auto",

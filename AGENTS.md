@@ -16,7 +16,7 @@ No lint/formatter config — keep `gofmt`-clean and match surrounding code. Do n
 ## Entrypoint and dispatch
 
 - `cmd/kuma-approve/main.go` is the only entrypoint. Flag parsing is hand-rolled: `--key value` pairs, bare `--flag` means `"true"`. There is no cobra/flag library — keep it that way.
-- Dispatch shape: `kuma-approve setup | auth <service> <account> | <service> <action> [flags]`. `setup`/`auth` bypass the registry and call `internal/setup` directly.
+- Dispatch shape: `kuma-approve setup | auth <service> <account> | trace on|off|status | <service> <action> [flags]`. `setup`/`auth` bypass the registry and call `internal/setup` directly; `trace` flips `approval.trace` in the config.
 - Services registered in `main.go`: `gmail`, `gcal` (both need `--account` resolution), `exec` (no account). `resolveAccount` strips `--account` before `Execute()` — service code never sees it. Single configured account is optional; multiple accounts without `--account` is a `NO_ACCOUNT` error.
 
 ## Architecture (`internal/`)
@@ -28,13 +28,14 @@ No lint/formatter config — keep `gofmt`-clean and match surrounding code. Do n
 - Approval tiers (`internal/approval/tier.go`): `auto` / `approve` / `deny`. Defaults in `internal/config/config.go`; user overrides in `~/.kuma-approve/config.json` under `approval.tiers` keyed as `"service:action"`. `exec:run` is `approve` for every command; the executor's safe list (`GetTier`/`GetTierWithShell`) is not wired into the router, so do not assume safe-listed commands auto-run. Deny-list regex matches reject outright with no approval path.
 - Executor (`internal/executor/`): direct `exec.Command(binary, args...)` by default; `--shell` switches to `sh -c`. Env is stripped to a minimal set, working dir defaults to `~/.kuma-approve/workspace`, timeout default 60s (`--timeout` overrides, max 3600), stdout/stderr truncated at `max_output_bytes`.
 - Pre-approval checks: a service may implement `service.Validator`; the router calls it before the approval gate. `exec` uses it for the deny list (`DENIED_BY_POLICY`) and parameter checks (`INVALID_ARGS`), so nobody is asked to approve a request that would be refused.
-- Root mode (`config.IsRoot()`, i.e. `sudo kuma-approve exec run ...`): this is the only path to root; `exec` never invokes `sudo`. State lives in fixed `/etc/kuma-approve/` and `config.VerifyRootOwned` must pass before the config is loaded. `RouterConfig.Privileged` forces the `approve` tier for everything and flags the Telegram message. Only `exec` and `setup` run as root. Never derive a root-mode path from `$HOME` or other caller-controlled input, and never add a way for a root action to skip approval.
+- Root mode (`config.IsRoot()`, i.e. `sudo kuma-approve exec run ...`): this is the only path to root; `exec` never invokes `sudo`. State lives in fixed `/etc/kuma-approve/` and `config.VerifyRootOwned` must pass before the config is loaded. `RouterConfig.Privileged` forces the `approve` tier for everything and flags the Telegram message. Only `exec`, `setup` and `trace` run as root. Never derive a root-mode path from `$HOME` or other caller-controlled input, and never add a way for a root action to skip approval.
 
 ## Contracts to preserve
 
 - Output: all results go through `internal/output` JSON envelope `{success, action, data, error{code,message}}` on stdout; failures exit nonzero. Never print prose to stdout or change envelope keys.
 - Runtime state (never commit, never read real user files in tests): `~/.kuma-approve/{config.json, credentials.enc, audit.log, workspace/}`, and `/etc/kuma-approve/{config.json, audit.log}` for root mode.
 - Credentials are machine-bound (AES-256-GCM + Argon2id over `/etc/machine-id` on Linux / `IOPlatformUUID` on macOS). Moving machines invalidates `credentials.enc` — fix is re-running `kuma-approve setup`, not debugging crypto. Tests use temp dirs; never touch the real store.
+- Traces: when `approval.trace` is on, `Router.logAction` also sends each outcome to Telegram through `approval.Tracer` (plain text, no parse mode), skipping auto-tier successes. A tracer failure must never fail or block the action. New outcomes should keep going through `logAction` so they are both audited and traced.
 - Audit log is append-only NDJSON; every `Dispatch` logs with sanitised params (email bodies truncated). Keep logging on all new actions.
 
 ## Conventions

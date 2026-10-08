@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ type RouterConfig struct {
 	Registry       *service.Registry
 	Approver       approval.Approver  // nil if no Telegram configured
 	Notifier       approval.Notifier  // nil if no notification backend configured
+	Tracer         approval.Tracer    // nil if tracing is off
 	TierOverrides  map[string]string
 	Logger         *audit.Logger // nil if audit logging disabled
 	TimeoutMinutes int
@@ -208,8 +210,53 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	return svcResult.Data, nil
 }
 
-// logAction writes an audit log entry if a logger is configured.
+// maxTraceParamLen bounds each parameter value shown in a trace event.
+const maxTraceParamLen = 300
+
+// trace sends a timestamped event to the tracer for every outcome that
+// involved an approval decision or a refusal. Auto-tier actions that succeed
+// are skipped so routine reads do not flood the chat. A tracer failure never
+// affects the action.
+func (r *Router) trace(action, account string, params map[string]string, status, result, errorCode string) {
+	if r.config.Tracer == nil || (status == "auto" && result == "success") {
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("[trace] %s\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC")))
+	b.WriteString(action)
+	if r.config.Privileged {
+		b.WriteString(" (root)")
+	}
+	b.WriteString(fmt.Sprintf(": %s, %s", status, result))
+	if errorCode != "" {
+		b.WriteString(fmt.Sprintf(" (%s)", errorCode))
+	}
+	b.WriteString("\n")
+	if account != "" {
+		b.WriteString(fmt.Sprintf("account: %s\n", account))
+	}
+
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := []rune(params[k])
+		if len(v) > maxTraceParamLen {
+			v = append(v[:maxTraceParamLen], []rune("...")...)
+		}
+		b.WriteString(fmt.Sprintf("%s: %s\n", k, string(v)))
+	}
+
+	r.config.Tracer.SendTrace(strings.TrimRight(b.String(), "\n"))
+}
+
+// logAction writes an audit log entry if a logger is configured, and emits
+// a trace event if tracing is on.
 func (r *Router) logAction(action, account string, params map[string]string, status, result, errorCode string) {
+	r.trace(action, account, params, status, result, errorCode)
 	if r.config.Logger == nil {
 		return
 	}

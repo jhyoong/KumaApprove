@@ -426,3 +426,50 @@ func TestTelegramParseModeByPrivilege(t *testing.T) {
 		})
 	}
 }
+
+func TestTelegramSendTrace(t *testing.T) {
+	var mu sync.Mutex
+	var text, chatID string
+	var hasParseMode bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/botsecret/sendMessage" {
+			r.ParseForm()
+			text = r.FormValue("text")
+			chatID = r.FormValue("chat_id")
+			_, hasParseMode = r.Form["parse_mode"]
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 1}})
+	}))
+	defer server.Close()
+
+	tg := NewTelegramApprover(TelegramConfig{
+		BotToken: "secret",
+		ChatID:   "123",
+		BaseURL:  server.URL,
+	})
+
+	event := "[trace] exec:run: denied\ncmd: rm_a *b* `c`"
+	if err := tg.SendTrace(event); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if text != event || chatID != "123" {
+		t.Errorf("expected the event verbatim to chat 123, got %q to %q", text, chatID)
+	}
+	if hasParseMode {
+		t.Error("traces must be sent without a parse mode")
+	}
+	mu.Unlock()
+
+	if err := tg.SendTrace(strings.Repeat("x", 10000)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len([]rune(text)) > 4096 {
+		t.Errorf("expected an overlong trace to be cut to fit a Telegram message, got %d characters", len([]rune(text)))
+	}
+}

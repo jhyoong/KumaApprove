@@ -21,6 +21,9 @@ type TelegramConfig struct {
 type ApprovalConfig struct {
 	TimeoutMinutes int               `json:"timeout_minutes"`
 	Tiers          map[string]string `json:"tiers"`
+	// Trace sends a timestamped line to Telegram for every approval or
+	// denial outcome. Toggle with `kuma-approve trace on|off`.
+	Trace bool `json:"trace"`
 }
 
 // ExecConfig controls command execution settings.

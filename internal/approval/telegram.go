@@ -279,6 +279,22 @@ func (t *TelegramApprover) SendPlainText(text string) error {
 	return err
 }
 
+// maxTraceLen keeps a trace within Telegram's 4096-character message limit.
+const maxTraceLen = 4000
+
+// SendTrace sends a trace event via Telegram. No parse mode is set, so
+// commands and other parameters appear exactly as they were given.
+func (t *TelegramApprover) SendTrace(text string) error {
+	if runes := []rune(text); len(runes) > maxTraceLen {
+		text = string(runes[:maxTraceLen]) + "..."
+	}
+	_, err := t.apiCall("sendMessage", url.Values{
+		"chat_id": {t.config.ChatID},
+		"text":    {text},
+	})
+	return err
+}
+
 // formatApprovalMessage builds a Markdown-formatted approval message.
 func formatApprovalMessage(req ApprovalRequest) string {
 	var b strings.Builder
