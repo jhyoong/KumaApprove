@@ -44,6 +44,10 @@ func main() {
 	}
 
 	if command == "auth" {
+		if config.IsRoot() {
+			fmt.Fprintln(os.Stderr, "auth is not available as root; root mode only supports 'setup' and 'exec'")
+			os.Exit(1)
+		}
 		runAuth(os.Args[2:])
 		return
 	}
@@ -68,6 +72,17 @@ func main() {
 			env.Error.DidYouMean = suggestion
 		}
 		output.PrintAndExit(env)
+		return
+	}
+
+	// As root the only job is running approved commands; account-backed
+	// services belong to the unprivileged user.
+	if config.IsRoot() && serviceName != "exec" {
+		output.PrintAndExit(output.Fail(
+			serviceName+":unknown",
+			"ROOT_EXEC_ONLY",
+			fmt.Sprintf("service %q is not available as root; root mode only supports exec", serviceName),
+		))
 		return
 	}
 
@@ -123,6 +138,18 @@ func main() {
 				env.Error.DidYouMean = suggestion
 			}
 			output.PrintAndExit(env)
+			return
+		}
+	}
+
+	// A root process must only trust a config that root alone can write.
+	if config.IsRoot() {
+		if err := config.VerifyRootOwned(config.DefaultPath()); err != nil {
+			output.PrintAndExit(output.Fail(
+				serviceName+":"+actionName,
+				"CONFIG_ERROR",
+				fmt.Sprintf("refusing to run as root with an untrusted config: %v (run 'sudo kuma-approve setup')", err),
+			))
 			return
 		}
 	}
@@ -212,6 +239,7 @@ func main() {
 		MaxOutputBytes:   cfg.Exec.MaxOutputBytes,
 		SafeList:         execSafeList,
 		DenyListPatterns: cfg.Exec.DenyListPatterns,
+		Privileged:       config.IsRoot(),
 	})
 	if err != nil {
 		output.PrintAndExit(output.Fail(
@@ -256,6 +284,7 @@ func main() {
 		TierOverrides:  cfg.Approval.Tiers,
 		Logger:         logger,
 		TimeoutMinutes: cfg.Approval.TimeoutMinutes,
+		Privileged:     config.IsRoot(),
 	})
 
 	result, err := router.Dispatch(serviceName, actionName, account, args)
@@ -485,6 +514,11 @@ Examples:
   kuma-approve gcal create --title "Standup" --start 2026-09-05T09:00:00Z --end 2026-09-05T09:30:00Z
   kuma-approve exec run --cmd "df -h"
 
+Running commands as root:
+  sudo -n kuma-approve exec run --cmd "systemctl restart nginx"
+  The whole CLI runs as root, uses /etc/kuma-approve/config.json, and always
+  asks for Telegram approval. One-time install: see "Root commands" in README.md.
+
 Run 'kuma-approve <service> --help' for actions, parameters, and examples.
 Run 'kuma-approve setup' for first-time configuration.`)
 }
@@ -521,6 +555,8 @@ var serviceExamples = map[string][]string{
 	"exec": {
 		`kuma-approve exec run --cmd "df -h"`,
 		`kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true`,
+		`kuma-approve exec run --cmd "make build" --timeout 300`,
+		`sudo -n kuma-approve exec run --cmd "systemctl restart nginx"   (as root, always needs approval)`,
 	},
 }
 

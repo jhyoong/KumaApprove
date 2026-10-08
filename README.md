@@ -124,7 +124,48 @@ kuma-approve exec run --cmd "df -h"
 
 # Shell mode for pipes and redirects (always requires approval)
 kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true
+
+# Override the default timeout (seconds, max 3600)
+kuma-approve exec run --cmd "make build" --timeout 300
 ```
+
+A command that runs but exits non-zero still returns `success: true` with `data.exit_code` set; the audit log records it as a failure (`NONZERO_EXIT`). Deny-listed commands and bad parameters are rejected before any approval is requested.
+
+### Root commands
+
+`exec` never calls `sudo` itself (`sudo` inside `--cmd` stays deny-listed). To run something as root, run the whole CLI under `sudo`:
+
+```bash
+sudo -n kuma-approve exec run --cmd "systemctl restart cloudflared"
+sudo -n kuma-approve exec run --cmd "cp /home/me/app.yml /etc/app/config.yml && systemctl restart app" --shell true
+```
+
+The approval gate then runs as root, where the calling agent cannot tamper with it. In root mode:
+
+- Config, audit log and bot token live in `/etc/kuma-approve/` (never `$HOME`). The CLI refuses to run unless the config and its directory are root-owned and not accessible to anyone else.
+- Every command requires Telegram approval. Tier overrides and the safe list cannot make a root command auto-run.
+- The approval message is marked as root and shows the complete command, untruncated.
+- Only `exec` and `setup` are available.
+
+One-time install:
+
+```bash
+# 1. Install the binary where only root can replace it
+go build -o kuma-approve ./cmd/kuma-approve/
+sudo install -o root -g root -m 0755 kuma-approve /usr/local/bin/kuma-approve
+
+# 2. Configure root mode (Telegram only)
+sudo kuma-approve setup
+
+# 3. Allow passwordless sudo for exactly this command (replace <user>)
+echo '<user> ALL=(root) NOPASSWD: /usr/local/bin/kuma-approve exec run *' | sudo tee /etc/sudoers.d/kuma-approve
+sudo chmod 0440 /etc/sudoers.d/kuma-approve
+sudo visudo -cf /etc/sudoers.d/kuma-approve
+```
+
+Use a **separate Telegram bot** for root mode, with its token stored only in `/etc/kuma-approve/config.json`. A process that can read a bot token can send you messages with working Approve buttons, so a token shared with `~/.kuma-approve/config.json` would let an unprivileged agent disguise a root request. `setup` refuses a token that matches the invoking user's config.
+
+Never grant the sudoers rule to a copy of the binary that a non-root user can write to.
 
 ### Authentication
 
@@ -188,7 +229,7 @@ Errors:
 }
 ```
 
-Error codes: `APPROVAL_REJECTED`, `APPROVAL_TIMEOUT`, `AUTH_EXPIRED`, `DENIED_BY_POLICY`, `EXECUTION_TIMEOUT`, `API_ERROR`, `INVALID_ARGS`.
+Error codes: `APPROVAL_REJECTED`, `APPROVAL_TIMEOUT`, `AUTH_EXPIRED`, `DENIED_BY_POLICY`, `EXECUTION_TIMEOUT`, `API_ERROR`, `INVALID_ARGS`, `ROOT_EXEC_ONLY`.
 
 ## Configuration
 

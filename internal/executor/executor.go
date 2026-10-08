@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +50,13 @@ func (w *limitWriter) String() string {
 const (
 	defaultTimeoutSeconds = 30
 	defaultMaxOutputBytes = 1048576 // 1 MB
+
+	// maxTimeoutSeconds caps the per-call --timeout override.
+	maxTimeoutSeconds = 3600
+
+	// maxPrivilegedCmdLen keeps a root command short enough to be shown in
+	// full in the approval message; it must never be approved truncated.
+	maxPrivilegedCmdLen = 3000
 )
 
 // Default safe list: command name -> approval tier.
@@ -87,6 +96,9 @@ type ExecConfig struct {
 	MaxOutputBytes   int
 	SafeList         map[string]string
 	DenyListPatterns []string
+	// Privileged is set when the process runs as root. Commands then get a
+	// root-appropriate environment.
+	Privileged bool
 }
 
 // TimeoutError indicates that a command exceeded its allowed execution time.
@@ -96,6 +108,15 @@ type TimeoutError struct {
 
 func (e *TimeoutError) Error() string {
 	return fmt.Sprintf("command timeout after %d seconds", e.TimeoutSeconds)
+}
+
+// DeniedError indicates that a command matched the deny list.
+type DeniedError struct {
+	Cmd string
+}
+
+func (e *DeniedError) Error() string {
+	return fmt.Sprintf("command denied: %q matches deny list", e.Cmd)
 }
 
 // ExecResult holds the output of a command execution.
@@ -163,6 +184,7 @@ func (e *ExecService) Actions() []service.ActionDefinition {
 			Params: []service.ParamDef{
 				{Name: "cmd", Required: true, Description: "Command to execute"},
 				{Name: "shell", Required: false, Description: "Use shell mode (true/false)"},
+				{Name: "timeout", Required: false, Description: fmt.Sprintf("Timeout in seconds (max %d)", maxTimeoutSeconds)},
 			},
 		},
 	}
@@ -170,22 +192,18 @@ func (e *ExecService) Actions() []service.ActionDefinition {
 
 // Execute runs the given action. Only the "run" action is supported.
 func (e *ExecService) Execute(action string, args map[string]string) (*service.Result, error) {
-	if action != "run" {
-		return nil, fmt.Errorf("unknown action: %s", action)
+	if err := e.Validate(action, args); err != nil {
+		return nil, err
 	}
 
-	cmdStr, ok := args["cmd"]
-	if !ok || strings.TrimSpace(cmdStr) == "" {
-		return nil, fmt.Errorf("missing required parameter: cmd")
-	}
-
-	if e.isDenied(cmdStr) {
-		return nil, fmt.Errorf("command denied: %q matches deny list", cmdStr)
-	}
-
+	cmdStr := args["cmd"]
 	shellMode := strings.ToLower(args["shell"]) == "true"
 
-	timeout := time.Duration(e.config.TimeoutSeconds) * time.Second
+	timeoutSeconds, err := e.timeoutSeconds(args)
+	if err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(timeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -203,6 +221,13 @@ func (e *ExecService) Execute(action string, args map[string]string) (*service.R
 		"HOME=/tmp",
 		"LANG=en_US.UTF-8",
 	}
+	if e.config.Privileged {
+		cmd.Env = []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"HOME=/root",
+			"LANG=en_US.UTF-8",
+		}
+	}
 
 	if e.config.WorkingDirectory != "" {
 		cmd.Dir = e.config.WorkingDirectory
@@ -213,12 +238,12 @@ func (e *ExecService) Execute(action string, args map[string]string) (*service.R
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	exitCode := 0
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return nil, &TimeoutError{TimeoutSeconds: e.config.TimeoutSeconds}
+			return nil, &TimeoutError{TimeoutSeconds: timeoutSeconds}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
@@ -235,6 +260,55 @@ func (e *ExecService) Execute(action string, args map[string]string) (*service.R
 			Truncated: stdoutBuf.truncated || stderrBuf.truncated,
 		},
 	}, nil
+}
+
+// Validate checks a request before it reaches the approval gate: unknown
+// parameters, a bad timeout, or a command matching the deny list are all
+// refused without asking for approval. Deny-list matches return *DeniedError.
+func (e *ExecService) Validate(action string, args map[string]string) error {
+	if action != "run" {
+		return fmt.Errorf("unknown action: %s", action)
+	}
+
+	var unknown []string
+	for k := range args {
+		if k != "cmd" && k != "shell" && k != "timeout" {
+			unknown = append(unknown, "--"+k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown parameter(s): %s", strings.Join(unknown, ", "))
+	}
+
+	cmdStr := args["cmd"]
+	if strings.TrimSpace(cmdStr) == "" {
+		return fmt.Errorf("missing required parameter: cmd")
+	}
+	if e.config.Privileged && len(cmdStr) > maxPrivilegedCmdLen {
+		return fmt.Errorf("command is %d bytes; commands run as root are limited to %d so the approval message can show them in full", len(cmdStr), maxPrivilegedCmdLen)
+	}
+	if _, err := e.timeoutSeconds(args); err != nil {
+		return err
+	}
+	if e.isDenied(cmdStr) {
+		return &DeniedError{Cmd: cmdStr}
+	}
+	return nil
+}
+
+// timeoutSeconds returns the --timeout override if given, else the
+// configured default.
+func (e *ExecService) timeoutSeconds(args map[string]string) (int, error) {
+	raw, ok := args["timeout"]
+	if !ok {
+		return e.config.TimeoutSeconds, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 || n > maxTimeoutSeconds {
+		return 0, fmt.Errorf("invalid timeout %q: must be a whole number of seconds between 1 and %d", raw, maxTimeoutSeconds)
+	}
+	return n, nil
 }
 
 // isDenied checks if the command matches any deny-list pattern.

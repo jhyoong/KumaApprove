@@ -32,6 +32,9 @@ type RouterConfig struct {
 	TierOverrides  map[string]string
 	Logger         *audit.Logger // nil if audit logging disabled
 	TimeoutMinutes int
+	// Privileged is set when running as root: every action then requires
+	// approval regardless of tier config, and requests are flagged as root.
+	Privileged bool
 }
 
 // Router dispatches service actions through the approval and audit pipeline.
@@ -88,8 +91,26 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		return nil, &RouterError{Code: "DENIED_BY_POLICY", Message: fmt.Sprintf("action %s denied by policy", actionKey)}
 	}
 
-	// Fetch service instance (needed for enrichment and execution).
+	// Nothing runs as root without a human approving it.
+	if r.config.Privileged {
+		tier = approval.TierApprove
+	}
+
+	// Fetch service instance (needed for validation, enrichment and execution).
 	svc := r.config.Registry.Get(serviceName)
+
+	// Let the service refuse the request before anyone is asked to approve it.
+	if validator, ok := svc.(service.Validator); ok {
+		if err := validator.Validate(actionName, args); err != nil {
+			code := "INVALID_ARGS"
+			var deniedErr *executor.DeniedError
+			if errors.As(err, &deniedErr) {
+				code = "DENIED_BY_POLICY"
+			}
+			r.logAction(actionKey, account, args, "denied", "failure", code)
+			return nil, &RouterError{Code: code, Message: err.Error(), Err: err}
+		}
+	}
 
 	// Enrich details for approval message if the service supports it.
 	details := args
@@ -125,9 +146,10 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		defer cancel()
 
 		result, err := r.config.Approver.RequestApproval(ctx, approval.ApprovalRequest{
-			Action:  actionKey,
-			Account: account,
-			Details: details,
+			Action:     actionKey,
+			Account:    account,
+			Details:    details,
+			Privileged: r.config.Privileged,
 		})
 		if err != nil {
 			errCode := "APPROVAL_ERROR"
@@ -175,6 +197,11 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	status := "auto"
 	if tier == approval.TierApprove {
 		status = "approved"
+	}
+	// A command that ran but exited non-zero is not a success in the audit trail.
+	if execResult, ok := svcResult.Data.(*executor.ExecResult); ok && execResult.ExitCode != 0 {
+		r.logAction(actionKey, account, args, status, "failure", "NONZERO_EXIT")
+		return svcResult.Data, nil
 	}
 	r.logAction(actionKey, account, args, status, "success", "")
 

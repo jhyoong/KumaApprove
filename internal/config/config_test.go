@@ -73,3 +73,88 @@ func TestSaveCreatesParentDirs(t *testing.T) {
 		t.Fatal("config file not created")
 	}
 }
+
+// privateDir returns a temp dir only its owner can write, whatever the umask.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestVerifyOwnedBy(t *testing.T) {
+	uid := uint32(os.Getuid())
+
+	t.Run("private file in private dir", func(t *testing.T) {
+		dir := privateDir(t)
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOwnedBy(path, uid); err != nil {
+			t.Fatalf("expected config to be accepted, got %v", err)
+		}
+	})
+
+	t.Run("wrong owner", func(t *testing.T) {
+		dir := privateDir(t)
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOwnedBy(path, uid+1); err == nil {
+			t.Fatal("expected a config owned by another user to be rejected")
+		}
+	})
+
+	t.Run("file readable by others", func(t *testing.T) {
+		dir := privateDir(t)
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOwnedBy(path, uid); err == nil {
+			t.Fatal("expected a world-readable config to be rejected")
+		}
+	})
+
+	t.Run("directory writable by others", func(t *testing.T) {
+		dir := privateDir(t)
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0777); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOwnedBy(path, uid); err == nil {
+			t.Fatal("expected a config in a world-writable directory to be rejected")
+		}
+	})
+
+	t.Run("symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(t.TempDir(), "real.json")
+		if err := os.WriteFile(target, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "config.json")
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOwnedBy(path, uid); err == nil {
+			t.Fatal("expected a symlinked config to be rejected")
+		}
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		if err := verifyOwnedBy(filepath.Join(privateDir(t), "config.json"), uid); err == nil {
+			t.Fatal("expected a missing config to be rejected")
+		}
+	})
+}

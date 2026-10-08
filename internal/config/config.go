@@ -2,12 +2,28 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
-// Dir returns the KumaApprove config directory path (~/.kuma-approve).
+// RootDir is the config directory used when running as root. It is a fixed
+// path (never derived from $HOME) so an unprivileged caller cannot point a
+// root process at a config file it controls.
+const RootDir = "/etc/kuma-approve"
+
+// IsRoot reports whether the process is running with root privileges.
+func IsRoot() bool {
+	return os.Geteuid() == 0
+}
+
+// Dir returns the KumaApprove config directory path: ~/.kuma-approve, or
+// RootDir when running as root.
 func Dir() string {
+	if IsRoot() {
+		return RootDir
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".kuma-approve")
 }
@@ -19,6 +35,10 @@ func DefaultPath() string {
 
 // Default returns a Config populated with sensible defaults.
 func Default() Config {
+	workDir := filepath.Join(Dir(), "workspace")
+	if IsRoot() {
+		workDir = "/root"
+	}
 	return Config{
 		Approval: ApprovalConfig{
 			TimeoutMinutes: 240,
@@ -49,7 +69,7 @@ func Default() Config {
 			},
 		},
 		Exec: ExecConfig{
-			WorkingDirectory: filepath.Join(Dir(), "workspace"),
+			WorkingDirectory: workDir,
 			TimeoutSeconds:   60,
 			MaxOutputBytes:   102400,
 			SafeList: []string{
@@ -80,6 +100,55 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// VerifyRootOwned checks that the config file at path, and the directory
+// holding it, can only be modified by root. A root process must not act on a
+// config that an unprivileged user could have written.
+func VerifyRootOwned(path string) error {
+	return verifyOwnedBy(path, 0)
+}
+
+func verifyOwnedBy(path string, uid uint32) error {
+	dir, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if !dir.IsDir() {
+		return fmt.Errorf("%s is not a directory", filepath.Dir(path))
+	}
+	if err := checkOwner(dir, uid); err != nil {
+		return err
+	}
+	if dir.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("%s is writable by group or others (mode %04o)", filepath.Dir(path), dir.Mode().Perm())
+	}
+
+	file, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !file.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	if err := checkOwner(file, uid); err != nil {
+		return err
+	}
+	if file.Mode().Perm()&0077 != 0 {
+		return fmt.Errorf("%s is accessible by group or others (mode %04o)", path, file.Mode().Perm())
+	}
+	return nil
+}
+
+func checkOwner(info os.FileInfo, uid uint32) error {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot determine owner of %s", info.Name())
+	}
+	if st.Uid != uid {
+		return fmt.Errorf("%s is owned by uid %d, expected uid %d", info.Name(), st.Uid, uid)
+	}
+	return nil
 }
 
 // Save writes the config to the given path as indented JSON.

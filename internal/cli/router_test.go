@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jhyoong/KumaApprove/internal/approval"
+	"github.com/jhyoong/KumaApprove/internal/audit"
+	"github.com/jhyoong/KumaApprove/internal/executor"
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
 
@@ -598,5 +602,138 @@ func TestRouterValidateOptionalParamsNotRequired(t *testing.T) {
 	_, err := r.Dispatch("gmail", "list", "user@test.com", map[string]string{})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+type validatingService struct {
+	fakeService
+	err error
+}
+
+func (v *validatingService) Validate(_ string, _ map[string]string) error { return v.err }
+
+func TestRouterValidatorRunsBeforeApproval(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{"deny list", &executor.DeniedError{Cmd: "sudo ls"}, "DENIED_BY_POLICY"},
+		{"bad args", fmt.Errorf("invalid timeout"), "INVALID_ARGS"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &validatingService{
+				fakeService: fakeService{
+					name:    "exec",
+					actions: []service.ActionDefinition{{Name: "run", DefaultTier: "approve"}},
+				},
+				err: tt.err,
+			}
+			reg := service.NewRegistry()
+			reg.Register(svc)
+			approver := &fakeApprover{approved: true}
+
+			r := NewRouter(RouterConfig{Registry: reg, Approver: approver})
+			_, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "x"})
+
+			var re *RouterError
+			if !errors.As(err, &re) || re.Code != tt.wantCode {
+				t.Fatalf("expected code %s, got %v", tt.wantCode, err)
+			}
+			if approver.called {
+				t.Fatal("approval was requested for a request that fails validation")
+			}
+			if svc.called != "" {
+				t.Fatal("service executed despite failing validation")
+			}
+		})
+	}
+}
+
+func TestRouterPrivilegedAlwaysRequiresApproval(t *testing.T) {
+	newReg := func() (*service.Registry, *fakeService) {
+		svc := &fakeService{
+			name:    "exec",
+			actions: []service.ActionDefinition{{Name: "run", DefaultTier: "auto"}},
+		}
+		reg := service.NewRegistry()
+		reg.Register(svc)
+		return reg, svc
+	}
+	overrides := map[string]string{"exec:run": "auto"}
+
+	t.Run("no approver", func(t *testing.T) {
+		reg, svc := newReg()
+		r := NewRouter(RouterConfig{Registry: reg, TierOverrides: overrides, Privileged: true})
+		_, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "x"})
+
+		var re *RouterError
+		if !errors.As(err, &re) || re.Code != "NO_APPROVER" {
+			t.Fatalf("expected NO_APPROVER, got %v", err)
+		}
+		if svc.called != "" {
+			t.Fatal("privileged action executed without approval")
+		}
+	})
+
+	t.Run("rejected", func(t *testing.T) {
+		reg, svc := newReg()
+		approver := &fakeApprover{approved: false}
+		r := NewRouter(RouterConfig{Registry: reg, TierOverrides: overrides, Approver: approver, Privileged: true})
+		_, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "x"})
+
+		var re *RouterError
+		if !errors.As(err, &re) || re.Code != "APPROVAL_REJECTED" {
+			t.Fatalf("expected APPROVAL_REJECTED, got %v", err)
+		}
+		if !approver.called || svc.called != "" {
+			t.Fatal("expected approval to be requested and execution to be blocked")
+		}
+	})
+
+	t.Run("approved", func(t *testing.T) {
+		reg, svc := newReg()
+		approver := &fakeApprover{approved: true}
+		r := NewRouter(RouterConfig{Registry: reg, TierOverrides: overrides, Approver: approver, Privileged: true})
+		if _, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "x"}); err != nil {
+			t.Fatal(err)
+		}
+		if !approver.called || svc.called != "run" {
+			t.Fatal("expected approval then execution")
+		}
+	})
+}
+
+func TestRouterAuditsNonZeroExit(t *testing.T) {
+	execSvc, err := executor.New(executor.ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := service.NewRegistry()
+	reg.Register(execSvc)
+
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRouter(RouterConfig{Registry: reg, Approver: &fakeApprover{approved: true}, Logger: logger})
+	result, err := r.Dispatch("exec", "run", "", map[string]string{"cmd": "false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.(*executor.ExecResult).ExitCode == 0 {
+		t.Fatal("expected a non-zero exit code in the result")
+	}
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), `"result":"failure"`) || !strings.Contains(string(logged), "NONZERO_EXIT") {
+		t.Fatalf("expected a NONZERO_EXIT failure in the audit log, got %s", logged)
 	}
 }

@@ -33,3 +33,10 @@ type Result struct {
 type Enricher interface {
 	EnrichDetails(action string, args map[string]string) (map[string]string, error)
 }
+
+// Validator is an optional interface that services can implement to reject
+// a request before the approval gate, so nobody is asked to approve
+// something that would be refused anyway.
+type Validator interface {
+	Validate(action string, args map[string]string) error
+}

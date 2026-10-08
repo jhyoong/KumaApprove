@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -350,5 +351,24 @@ func TestTelegramSendPlainText(t *testing.T) {
 	}
 	if got.Has("parse_mode") {
 		t.Errorf("parse_mode should be unset, got %q", got.Get("parse_mode"))
+	}
+}
+
+func TestFormatPrivilegedApprovalMessage(t *testing.T) {
+	cmd := "cp a_b /etc/x && echo `id` *star* <tag> " + strings.Repeat("y", 600)
+	msg := formatPrivilegedApprovalMessage(ApprovalRequest{
+		RequestID: "abcd1234",
+		Action:    "exec:run",
+		Details:   map[string]string{"cmd": cmd, "shell": "true"},
+	})
+
+	if !strings.Contains(msg, "root") {
+		t.Error("expected the message to say the action runs as root")
+	}
+	if !strings.Contains(msg, "<pre>"+html.EscapeString(cmd)+"</pre>") {
+		t.Errorf("expected the full command, escaped and untruncated, got %s", msg)
+	}
+	if strings.Contains(msg, "<tag>") {
+		t.Error("expected HTML in the command to be escaped")
 	}
 }

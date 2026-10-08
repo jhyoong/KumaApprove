@@ -14,6 +14,8 @@ type ApprovalRequest struct {
 	Action    string
 	Account   string
 	Details   map[string]string
+	// Privileged marks an action that will run as root.
+	Privileged bool
 }
 
 // ApprovalResult holds the outcome of an approval decision.

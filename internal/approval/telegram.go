@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -65,7 +67,10 @@ func (t *TelegramApprover) RequestApproval(ctx context.Context, req ApprovalRequ
 
 // sendApprovalMessage formats and sends the approval message with inline keyboard.
 func (t *TelegramApprover) sendApprovalMessage(req ApprovalRequest) (int64, error) {
-	text := formatApprovalMessage(req)
+	text, parseMode := formatApprovalMessage(req), "Markdown"
+	if req.Privileged {
+		text, parseMode = formatPrivilegedApprovalMessage(req), "HTML"
+	}
 
 	keyboard := map[string]any{
 		"inline_keyboard": [][]map[string]string{
@@ -80,7 +85,7 @@ func (t *TelegramApprover) sendApprovalMessage(req ApprovalRequest) (int64, erro
 	params := url.Values{
 		"chat_id":      {t.config.ChatID},
 		"text":         {text},
-		"parse_mode":   {"Markdown"},
+		"parse_mode":   {parseMode},
 		"reply_markup": {string(kbJSON)},
 	}
 
@@ -296,6 +301,29 @@ func formatApprovalMessage(req ApprovalRequest) string {
 	}
 
 	b.WriteString(fmt.Sprintf("\n*Request ID:* `%s`", req.RequestID))
+	return b.String()
+}
+
+// formatPrivilegedApprovalMessage builds the approval message for an action
+// that will run as root. It uses HTML with every value escaped and nothing
+// truncated, so what is shown is exactly what will run.
+func formatPrivilegedApprovalMessage(req ApprovalRequest) string {
+	var b strings.Builder
+	b.WriteString("\u26a0\ufe0f <b>KumaApprove -- ROOT Approval Required</b>\n\n")
+	b.WriteString("This will run as <b>root</b>.\n\n")
+	b.WriteString(fmt.Sprintf("<b>Action:</b> <code>%s</code>\n", html.EscapeString(req.Action)))
+	b.WriteString(fmt.Sprintf("<b>Time:</b> %s\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC")))
+
+	keys := make([]string, 0, len(req.Details))
+	for k := range req.Details {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(fmt.Sprintf("\n<b>%s:</b>\n<pre>%s</pre>\n", html.EscapeString(k), html.EscapeString(req.Details[k])))
+	}
+
+	b.WriteString(fmt.Sprintf("\n<b>Request ID:</b> <code>%s</code>", html.EscapeString(req.RequestID)))
 	return b.String()
 }
 
