@@ -269,21 +269,12 @@ func (t *TelegramApprover) SendMessage(text string) error {
 	return err
 }
 
-// SendPlainText sends a message with no parse mode, so text such as URLs
-// (whose underscores Markdown would eat) arrives exactly as given.
-func (t *TelegramApprover) SendPlainText(text string) error {
-	_, err := t.apiCall("sendMessage", url.Values{
-		"chat_id": {t.config.ChatID},
-		"text":    {text},
-	})
-	return err
-}
-
-// maxTraceLen keeps a trace within Telegram's 4096-character message limit.
+// maxTraceLen keeps a message within Telegram's 4096-character limit.
 const maxTraceLen = 4000
 
-// SendTrace sends a trace event via Telegram. No parse mode is set, so
-// commands and other parameters appear exactly as they were given.
+// SendTrace sends a plain-text message via Telegram, such as a trace event or
+// a re-auth URL. No parse mode is set, so commands, URLs and other parameters
+// appear exactly as they were given (Markdown would eat their underscores).
 func (t *TelegramApprover) SendTrace(text string) error {
 	if runes := []rune(text); len(runes) > maxTraceLen {
 		text = string(runes[:maxTraceLen]) + "..."

@@ -270,7 +270,7 @@ func main() {
 		if cfg.Approval.Trace {
 			tracer = tg
 		}
-		gauth.Notify = tg.SendPlainText
+		gauth.Notify = tg.SendTrace
 	}
 
 	// Create audit logger.
@@ -455,7 +455,7 @@ func runAuth(args []string) {
 			gauth.Notify = approval.NewTelegramApprover(approval.TelegramConfig{
 				BotToken: cfg.Telegram.BotToken,
 				ChatID:   cfg.Telegram.ChatID,
-			}).SendPlainText
+			}).SendTrace
 		}
 		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
 		flow := gauth.RunOAuthFlow
