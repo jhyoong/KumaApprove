@@ -264,6 +264,16 @@ func (t *TelegramApprover) SendMessage(text string) error {
 	return err
 }
 
+// SendPlainText sends a message with no parse mode, so text such as URLs
+// (whose underscores Markdown would eat) arrives exactly as given.
+func (t *TelegramApprover) SendPlainText(text string) error {
+	_, err := t.apiCall("sendMessage", url.Values{
+		"chat_id": {t.config.ChatID},
+		"text":    {text},
+	})
+	return err
+}
+
 // formatApprovalMessage builds a Markdown-formatted approval message.
 func formatApprovalMessage(req ApprovalRequest) string {
 	var b strings.Builder

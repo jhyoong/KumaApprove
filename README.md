@@ -136,6 +136,8 @@ kuma-approve auth outlook you@outlook.com
 kuma-approve auth msft-cal you@outlook.com
 ```
 
+For Google services, `auth` uses the relay flow when `relay_url` is configured (see [Token Refresh](#token-refresh)), so it works on a headless host: open the link on your phone and the token lands on the box. Set `KUMA_OAUTH_LOCAL=1` to force the local browser flow instead.
+
 ### Multi-account
 
 If multiple accounts are configured for a service, use `--account`:
@@ -307,9 +309,9 @@ Credentials are stored encrypted at `~/.kuma-approve/credentials.enc` using AES-
 
 Access tokens are refreshed automatically before each API call when they are near expiry. If a refresh fails (e.g. the token has been revoked or the project is in "Testing" mode with 7-day expiry), the CLI attempts re-authorization automatically:
 
-1. **Relay flow** (if `relay_url` is configured): prints an authorization URL to stderr with the `[AUTH_RELAY]` prefix. The user opens the URL on any device, authorizes with Google, and the relay forwards the authorization code back to the CLI. See `docs/relay-setup-guide.md` for setup.
+1. **Relay flow** (if `relay_url` is configured): prints an authorization URL to stderr with the `[AUTH_RELAY]` prefix and, if Telegram is configured, sends the same URL to the Telegram chat as plain text. The user opens the URL on any device, authorizes with Google, and the relay forwards the authorization code back to the CLI. Add `<relay_url>/callback` as an authorized redirect URI on the OAuth client.
 
-2. **Browser OAuth** (local fallback): opens a browser for direct authorization on the local machine.
+2. **Browser OAuth** (only when `relay_url` is not set): opens a browser for direct authorization on the local machine. With a relay configured there is no local fallback, because a `127.0.0.1` callback is unreachable from another device.
 
 If all re-auth methods fail, the CLI returns `AUTH_EXPIRED`.
 
@@ -318,7 +320,7 @@ If all re-auth methods fail, the CLI returns `AUTH_EXPIRED`.
 [AUTH_RELAY] Waiting for authorization (timeout 5m)...
 ```
 
-The `[AUTH_RELAY]` prefix on stderr is a stable tag that AI agents can detect and relay to the user.
+The `[AUTH_RELAY]` prefix on stderr is a stable tag that AI agents can detect and relay to the user. Prefer the Telegram copy: the URL is long, and forwarding it through a Markdown renderer (which eats the underscores in `response_type`, `redirect_uri`, ...) or cutting it at the first `&` makes Google reject it with `Error 400: invalid_request`.
 
 ## Audit Log
 

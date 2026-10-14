@@ -52,6 +52,10 @@ type GoogleAuth struct {
 	DeviceCodeURL string
 	RelayURL      string
 	Store         CredentialStore
+	// Notify, if set, receives the relay authorization URL so it reaches the
+	// user intact (e.g. a plain-text Telegram message) instead of depending on
+	// an agent to copy it out of stderr. A Notify failure never aborts the flow.
+	Notify func(text string) error
 }
 
 var defaultScopes = map[string][]string{
@@ -277,6 +281,13 @@ func (g *GoogleAuth) runDeviceFlow(service, account string) (string, error) {
 	return token, nil
 }
 
+// RunRelayFlow authorizes the given service and account through the OAuth
+// relay, so the consent URL can be opened on any device. It requires RelayURL.
+func (g *GoogleAuth) RunRelayFlow(service, account string) error {
+	_, err := g.runRelayFlow(service, account)
+	return err
+}
+
 func (g *GoogleAuth) runRelayFlow(service, account string) (string, error) {
 	if g.RelayURL == "" {
 		return "", fmt.Errorf("relay URL not configured")
@@ -305,6 +316,12 @@ func (g *GoogleAuth) runRelayFlow(service, account string) (string, error) {
 
 	fmt.Fprintf(os.Stderr, "[AUTH_RELAY] Authorize at: %s\n", authURL)
 	fmt.Fprintf(os.Stderr, "[AUTH_RELAY] Waiting for authorization (timeout 5m)...\n")
+	if g.Notify != nil {
+		msg := fmt.Sprintf("KumaApprove: re-authorize %s for %s (link valid for 5 minutes):\n%s", service, account, authURL)
+		if err := g.Notify(msg); err != nil {
+			fmt.Fprintf(os.Stderr, "[AUTH_RELAY] Could not send URL notification: %v\n", err)
+		}
+	}
 
 	pollURL := fmt.Sprintf("%s/poll?session=%s", strings.TrimRight(g.RelayURL, "/"), url.QueryEscape(sessionID))
 	deadline := time.Now().Add(5 * time.Minute)
@@ -358,11 +375,9 @@ func (g *GoogleAuth) reAuth(service, account string) (string, error) {
 	}
 
 	if g.RelayURL != "" {
-		token, err := g.runRelayFlow(service, account)
-		if err == nil {
-			return token, nil
-		}
-		fmt.Fprintf(os.Stderr, "[AUTH] Relay flow failed: %v\n", err)
+		// No local browser fallback: with a relay configured the host is
+		// assumed headless, and a 127.0.0.1 callback would be a dead end.
+		return g.runRelayFlow(service, account)
 	}
 
 	fmt.Fprintf(os.Stderr, "[AUTH] Falling back to browser OAuth...\n")

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -322,5 +323,32 @@ func TestTelegramCancelOnContextExit(t *testing.T) {
 	defer mu.Unlock()
 	if !editTextCalled {
 		t.Fatal("expected editMessageText to be called for cancellation")
+	}
+}
+
+func TestTelegramSendPlainText(t *testing.T) {
+	var got url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		got = r.PostForm
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{}})
+	}))
+	defer server.Close()
+
+	tg := NewTelegramApprover(TelegramConfig{
+		BotToken: "test-token",
+		ChatID:   "12345",
+		BaseURL:  server.URL,
+	})
+
+	text := "https://accounts.google.com/o/oauth2/v2/auth?client_id=x&response_type=code"
+	if err := tg.SendPlainText(text); err != nil {
+		t.Fatalf("SendPlainText: %v", err)
+	}
+	if got.Get("text") != text {
+		t.Errorf("text = %q, want %q", got.Get("text"), text)
+	}
+	if got.Has("parse_mode") {
+		t.Errorf("parse_mode should be unset, got %q", got.Get("parse_mode"))
 	}
 }

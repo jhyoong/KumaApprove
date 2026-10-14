@@ -233,6 +233,7 @@ func main() {
 		})
 		approver = tg
 		notifier = tg
+		gauth.Notify = tg.SendPlainText
 	}
 
 	// Create audit logger.
@@ -356,8 +357,18 @@ func runAuth(args []string) {
 			RelayURL:     cfg.GoogleOAuth.RelayURL,
 			Store:        store,
 		}
+		if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+			gauth.Notify = approval.NewTelegramApprover(approval.TelegramConfig{
+				BotToken: cfg.Telegram.BotToken,
+				ChatID:   cfg.Telegram.ChatID,
+			}).SendPlainText
+		}
 		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
-		if err := gauth.RunOAuthFlow(serviceName, account); err != nil {
+		flow := gauth.RunOAuthFlow
+		if gauth.RelayURL != "" && os.Getenv("KUMA_OAUTH_LOCAL") == "" {
+			flow = gauth.RunRelayFlow
+		}
+		if err := flow(serviceName, account); err != nil {
 			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -458,11 +469,16 @@ Token Re-Auth:
   When a Google token expires mid-operation, the CLI tries these flows in order:
 
   1. Relay flow (all services, if relay_url is configured): prints an auth URL to
-     stderr with the [AUTH_RELAY] prefix. The user authorizes from any device
+     stderr with the [AUTH_RELAY] prefix and, if Telegram is configured, sends it
+     to the Telegram chat as plain text. The user authorizes from any device
      (phone, laptop), and the relay forwards the code back to the CLI.
-     Set relay_url in config or during setup. See docs/relay-setup-guide.md.
+     Set relay_url in config or during setup.
 
-  2. Browser OAuth (local fallback): opens a browser for direct authorization.
+  2. Browser OAuth (only when relay_url is not set): opens a browser for direct
+     authorization on the local machine.
+
+  'kuma-approve auth gmail|gcal <account>' uses the relay flow too when relay_url
+  is set. Set KUMA_OAUTH_LOCAL=1 to force the local browser flow.
 
 Examples:
   kuma-approve gmail list --limit 10
