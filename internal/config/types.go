@@ -3,9 +3,9 @@ package config
 // Config is the top-level configuration for KumaApprove,
 // stored at ~/.kuma-approve/config.json.
 type Config struct {
-	Telegram    TelegramConfig      `json:"telegram"`
-	Approval    ApprovalConfig      `json:"approval"`
-	Exec        ExecConfig          `json:"exec"`
+	Telegram       TelegramConfig       `json:"telegram"`
+	Approval       ApprovalConfig       `json:"approval"`
+	Exec           ExecConfig           `json:"exec"`
 	GoogleOAuth    GoogleOAuthConfig    `json:"google_oauth"`
 	MicrosoftOAuth MicrosoftOAuthConfig `json:"microsoft_oauth"`
 	Accounts       map[string][]string  `json:"accounts"`

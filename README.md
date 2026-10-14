@@ -18,7 +18,7 @@ Agents invoke KumaApprove as a subprocess, receive structured JSON on stdout, an
 2. Enable the Gmail API and Google Calendar API.
 3. Create an OAuth 2.0 Client ID (Application type: **Web application**).
 4. Under **Authorized redirect URIs**, add `http://127.0.0.1` (for the local browser OAuth flow).
-5. If using the relay for headless re-auth, also add your relay callback URL (e.g. `https://kuma-relay.<your-subdomain>.workers.dev/callback`). See `docs/relay-setup-guide.md`.
+5. If using the relay for headless re-auth, also add your relay callback URL (e.g. `https://kuma-relay.<your-subdomain>.workers.dev/callback`). See [Token Refresh](#token-refresh).
 6. Set the OAuth consent screen to "Production" (unverified). Users see a one-time "This app isn't verified" warning during initial auth. This avoids the 7-day refresh token expiry that "Testing" mode enforces.
 
 ### Microsoft OAuth setup (optional)

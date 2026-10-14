@@ -446,62 +446,6 @@ func Run() {
 	fmt.Println("Setup complete! KumaApprove is ready to use.")
 }
 
-// RunAuth re-authorizes a single service for a given account.
-func RunAuth(serviceName, account string) {
-	cfg, err := config.Load(config.DefaultPath())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	machineID, err := credstore.GetMachineID()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to get machine ID: %v\n", err)
-		os.Exit(1)
-	}
-
-	encKey, err := credstore.DeriveKey(machineID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to derive key: %v\n", err)
-		os.Exit(1)
-	}
-
-	storePath := filepath.Join(config.Dir(), "credentials.enc")
-	store, err := credstore.NewStore(storePath, encKey)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to open credential store: %v\n", err)
-		os.Exit(1)
-	}
-
-	switch serviceName {
-	case "outlook", "msft-cal":
-		msauth := &auth.MicrosoftAuth{
-			ClientID: cfg.MicrosoftOAuth.ClientID,
-			TenantID: cfg.MicrosoftOAuth.TenantID,
-			Store:    store,
-		}
-		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
-		if err := msauth.RunOAuthFlow(serviceName, account); err != nil {
-			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
-			os.Exit(1)
-		}
-	default:
-		gauth := &auth.GoogleAuth{
-			ClientID:     cfg.GoogleOAuth.ClientID,
-			ClientSecret: cfg.GoogleOAuth.ClientSecret,
-			RelayURL:     cfg.GoogleOAuth.RelayURL,
-			Store:        store,
-		}
-		fmt.Printf("Authorizing %s for %s...\n", serviceName, account)
-		if err := gauth.RunOAuthFlow(serviceName, account); err != nil {
-			fmt.Fprintf(os.Stderr, "OAuth failed: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	fmt.Printf("Authorization for %s:%s complete.\n", serviceName, account)
-}
-
 // detectChatID calls the Telegram getUpdates API and extracts the chat ID
 // from the first message result.
 func detectChatID(botToken string) (string, error) {

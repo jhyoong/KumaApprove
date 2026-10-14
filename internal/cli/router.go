@@ -28,9 +28,9 @@ func (e *RouterError) Unwrap() error { return e.Err }
 // RouterConfig holds the dependencies for the approval-aware Router.
 type RouterConfig struct {
 	Registry       *service.Registry
-	Approver       approval.Approver  // nil if no Telegram configured
-	Notifier       approval.Notifier  // nil if no notification backend configured
-	Tracer         approval.Tracer    // nil if tracing is off
+	Approver       approval.Approver // nil if no Telegram configured
+	Notifier       approval.Tracer   // plain-text alerts sent even with tracing off; nil if no Telegram
+	Tracer         approval.Tracer   // nil if tracing is off
 	TierOverrides  map[string]string
 	Logger         *audit.Logger // nil if audit logging disabled
 	TimeoutMinutes int
@@ -178,9 +178,9 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		var authErr *auth.AuthExpiredError
 		if errors.As(err, &authErr) {
 			if r.config.Notifier != nil {
-				msg := fmt.Sprintf("Auth for %s:%s has expired. Run `kuma-approve auth %s %s` to re-authorize.",
+				msg := fmt.Sprintf("Auth for %s:%s has expired. Run: kuma-approve auth %s %s",
 					authErr.Service, authErr.Account, authErr.Service, authErr.Account)
-				r.config.Notifier.SendMessage(msg)
+				r.config.Notifier.SendTrace(msg)
 			}
 			r.logAction(actionKey, account, args, status, "failure", "AUTH_EXPIRED")
 			return nil, &RouterError{Code: "AUTH_EXPIRED", Message: err.Error(), Err: err}

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/jhyoong/KumaApprove/internal/approval"
 )
 
 func TestDirectExec(t *testing.T) {
@@ -77,44 +75,6 @@ func TestDenyListBlock(t *testing.T) {
 				t.Errorf("expected error to contain 'denied', got %q", err.Error())
 			}
 		})
-	}
-}
-
-func TestSafeListClassification(t *testing.T) {
-	svc, err := New(ExecConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		cmd  string
-		tier string
-	}{
-		{"echo hello", approval.TierAuto},
-		{"ls -la", approval.TierAuto},
-		{"git status", approval.TierApprove},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.cmd, func(t *testing.T) {
-			tier := svc.GetTier(tc.cmd)
-			if tier != tc.tier {
-				t.Errorf("GetTier(%q) = %q, want %q", tc.cmd, tier, tc.tier)
-			}
-		})
-	}
-}
-
-func TestShellBumpsToApprove(t *testing.T) {
-	svc, err := New(ExecConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Even a safe "echo" command should be bumped to "approve" in shell mode.
-	tier := svc.GetTierWithShell("echo hello")
-	if tier != approval.TierApprove {
-		t.Errorf("GetTierWithShell('echo hello') = %q, want %q", tier, approval.TierApprove)
 	}
 }
 

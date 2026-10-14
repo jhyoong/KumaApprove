@@ -59,25 +59,6 @@ const (
 	maxPrivilegedCmdLen = 3000
 )
 
-// Default safe list: command name -> approval tier.
-var defaultSafeList = map[string]string{
-	"echo":   approval.TierAuto,
-	"ls":     approval.TierAuto,
-	"cat":    approval.TierAuto,
-	"head":   approval.TierAuto,
-	"tail":   approval.TierAuto,
-	"wc":     approval.TierAuto,
-	"grep":   approval.TierAuto,
-	"find":   approval.TierAuto,
-	"date":   approval.TierAuto,
-	"whoami": approval.TierAuto,
-	"pwd":    approval.TierAuto,
-	"uname":  approval.TierAuto,
-	"which":  approval.TierAuto,
-	"env":    approval.TierApprove,
-	"git":    approval.TierApprove,
-}
-
 // Default deny patterns.
 var defaultDenyPatterns = []string{
 	`\bsudo\b`,
@@ -94,7 +75,6 @@ type ExecConfig struct {
 	WorkingDirectory string
 	TimeoutSeconds   int
 	MaxOutputBytes   int
-	SafeList         map[string]string
 	DenyListPatterns []string
 	// Privileged is set when the process runs as root. Commands then get a
 	// root-appropriate environment.
@@ -131,7 +111,6 @@ type ExecResult struct {
 type ExecService struct {
 	config       ExecConfig
 	denyPatterns []*regexp.Regexp
-	safeList     map[string]string
 }
 
 // New creates a new ExecService from the given configuration.
@@ -143,11 +122,6 @@ func New(cfg ExecConfig) (*ExecService, error) {
 	}
 	if cfg.MaxOutputBytes <= 0 {
 		cfg.MaxOutputBytes = defaultMaxOutputBytes
-	}
-
-	safeList := cfg.SafeList
-	if safeList == nil {
-		safeList = defaultSafeList
 	}
 
 	denyRaw := cfg.DenyListPatterns
@@ -167,7 +141,6 @@ func New(cfg ExecConfig) (*ExecService, error) {
 	return &ExecService{
 		config:       cfg,
 		denyPatterns: compiled,
-		safeList:     safeList,
 	}, nil
 }
 
@@ -319,33 +292,4 @@ func (e *ExecService) isDenied(cmd string) bool {
 		}
 	}
 	return false
-}
-
-// GetTier returns the approval tier for a command based on the safe list.
-// Returns "approve" if the command is not in the safe list.
-// Returns "deny" if the command matches the deny list.
-func (e *ExecService) GetTier(cmd string) string {
-	if e.isDenied(cmd) {
-		return approval.TierDeny
-	}
-
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return approval.TierApprove
-	}
-
-	cmdName := parts[0]
-	if tier, ok := e.safeList[cmdName]; ok {
-		return tier
-	}
-	return approval.TierApprove
-}
-
-// GetTierWithShell returns the approval tier for a command in shell mode.
-// Shell mode always returns "approve" regardless of the safe list.
-func (e *ExecService) GetTierWithShell(cmd string) string {
-	if e.isDenied(cmd) {
-		return approval.TierDeny
-	}
-	return approval.TierApprove
 }
