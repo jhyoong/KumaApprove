@@ -44,7 +44,16 @@ func main() {
 	}
 
 	if command == "auth" {
+		if config.IsRoot() {
+			fmt.Fprintln(os.Stderr, "auth is not available as root; root mode only supports 'setup', 'trace' and 'exec'")
+			os.Exit(1)
+		}
 		runAuth(os.Args[2:])
+		return
+	}
+
+	if command == "trace" {
+		runTrace(os.Args[2:])
 		return
 	}
 
@@ -68,6 +77,17 @@ func main() {
 			env.Error.DidYouMean = suggestion
 		}
 		output.PrintAndExit(env)
+		return
+	}
+
+	// As root the only job is running approved commands; account-backed
+	// services belong to the unprivileged user.
+	if config.IsRoot() && serviceName != "exec" {
+		output.PrintAndExit(output.Fail(
+			serviceName+":unknown",
+			"ROOT_EXEC_ONLY",
+			fmt.Sprintf("service %q is not available as root; root mode only supports exec", serviceName),
+		))
 		return
 	}
 
@@ -123,6 +143,18 @@ func main() {
 				env.Error.DidYouMean = suggestion
 			}
 			output.PrintAndExit(env)
+			return
+		}
+	}
+
+	// A root process must only trust a config that root alone can write.
+	if config.IsRoot() {
+		if err := config.VerifyRootOwned(config.DefaultPath()); err != nil {
+			output.PrintAndExit(output.Fail(
+				serviceName+":"+actionName,
+				"CONFIG_ERROR",
+				fmt.Sprintf("refusing to run as root with an untrusted config: %v (run 'sudo kuma-approve setup')", err),
+			))
 			return
 		}
 	}
@@ -212,6 +244,7 @@ func main() {
 		MaxOutputBytes:   cfg.Exec.MaxOutputBytes,
 		SafeList:         execSafeList,
 		DenyListPatterns: cfg.Exec.DenyListPatterns,
+		Privileged:       config.IsRoot(),
 	})
 	if err != nil {
 		output.PrintAndExit(output.Fail(
@@ -226,6 +259,7 @@ func main() {
 	// Create Telegram approver if configured.
 	var approver approval.Approver
 	var notifier approval.Notifier
+	var tracer approval.Tracer
 	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 		tg := approval.NewTelegramApprover(approval.TelegramConfig{
 			BotToken: cfg.Telegram.BotToken,
@@ -233,6 +267,9 @@ func main() {
 		})
 		approver = tg
 		notifier = tg
+		if cfg.Approval.Trace {
+			tracer = tg
+		}
 		gauth.Notify = tg.SendPlainText
 	}
 
@@ -253,9 +290,11 @@ func main() {
 		Registry:       registry,
 		Approver:       approver,
 		Notifier:       notifier,
+		Tracer:         tracer,
 		TierOverrides:  cfg.Approval.Tiers,
 		Logger:         logger,
 		TimeoutMinutes: cfg.Approval.TimeoutMinutes,
+		Privileged:     config.IsRoot(),
 	})
 
 	result, err := router.Dispatch(serviceName, actionName, account, args)
@@ -303,6 +342,61 @@ func resolveAccount(args map[string]string, cfg config.Config, serviceName, acti
 
 func runSetup() {
 	setup.Run()
+}
+
+// applyTrace updates cfg for a `trace on|off|status` argument.
+func applyTrace(cfg *config.Config, arg string) error {
+	switch arg {
+	case "on":
+		cfg.Approval.Trace = true
+	case "off":
+		cfg.Approval.Trace = false
+	case "status":
+	default:
+		return fmt.Errorf("usage: kuma-approve trace on|off|status")
+	}
+	return nil
+}
+
+// runTrace toggles or reports the trace setting in the config for the
+// current user (the root config when run under sudo).
+func runTrace(args []string) {
+	arg := "status"
+	if len(args) > 0 {
+		arg = args[0]
+	}
+	action := "trace:" + arg
+
+	path := config.DefaultPath()
+	if config.IsRoot() {
+		if err := config.VerifyRootOwned(path); err != nil {
+			output.PrintAndExit(output.Fail(action, "CONFIG_ERROR",
+				fmt.Sprintf("refusing to use an untrusted config as root: %v (run 'sudo kuma-approve setup')", err)))
+			return
+		}
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		output.PrintAndExit(output.Fail(action, "CONFIG_ERROR", fmt.Sprintf("failed to load config: %v", err)))
+		return
+	}
+
+	was := cfg.Approval.Trace
+	if err := applyTrace(&cfg, arg); err != nil {
+		output.PrintAndExit(output.Fail(action, "INVALID_ARGS", err.Error()))
+		return
+	}
+	if cfg.Approval.Trace != was {
+		if err := config.Save(cfg, path); err != nil {
+			output.PrintAndExit(output.Fail(action, "CONFIG_ERROR", fmt.Sprintf("failed to save config: %v", err)))
+			return
+		}
+	}
+
+	output.PrintAndExit(output.Success(action, map[string]any{
+		"trace":  cfg.Approval.Trace,
+		"config": path,
+	}))
 }
 
 func runAuth(args []string) {
@@ -457,13 +551,16 @@ Usage:
   kuma-approve <service> <action> [flags]
   kuma-approve setup
   kuma-approve auth <service> <account>
+  kuma-approve trace on|off|status              (send every approval/denial outcome to Telegram)
+  sudo kuma-approve setup                       (configure root mode)
+  sudo -n kuma-approve exec run --cmd "..."     (run a command as root)
 
 Services:
   gmail       Gmail operations (list, get, search, send, reply, draft)
   gcal        Google Calendar operations (list, get, create, update, delete)
   outlook     Outlook email operations (list, get, search, send, reply, draft)
   msft-cal    Microsoft Calendar operations (list, get, create, update, delete)
-  exec        Shell command execution (run)
+  exec        Shell command execution (run); every command needs approval
 
 Token Re-Auth:
   When a Google token expires mid-operation, the CLI tries these flows in order:
@@ -485,8 +582,19 @@ Examples:
   kuma-approve gcal create --title "Standup" --start 2026-09-05T09:00:00Z --end 2026-09-05T09:30:00Z
   kuma-approve exec run --cmd "df -h"
 
+Running commands as root:
+  sudo -n kuma-approve exec run --cmd "systemctl restart nginx"
+  The whole CLI runs as root, uses /etc/kuma-approve/config.json, and always
+  asks for Telegram approval. One-time install: see "Root commands" in README.md.
+
+Traces:
+  'kuma-approve trace on' sends a timestamped line to the Telegram chat for every
+  approved, rejected, denied or failed request. Run it with sudo to toggle traces
+  for root mode, which has its own config and bot.
+
 Run 'kuma-approve <service> --help' for actions, parameters, and examples.
-Run 'kuma-approve setup' for first-time configuration.`)
+Run 'kuma-approve setup' for first-time configuration.
+Run 'sudo kuma-approve setup' to configure root mode (needs its own Telegram bot).`)
 }
 
 var serviceDescriptions = map[string]string{
@@ -521,6 +629,8 @@ var serviceExamples = map[string][]string{
 	"exec": {
 		`kuma-approve exec run --cmd "df -h"`,
 		`kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true`,
+		`kuma-approve exec run --cmd "make build" --timeout 300`,
+		`sudo -n kuma-approve exec run --cmd "systemctl restart nginx"   (as root, always needs approval)`,
 	},
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,9 +30,13 @@ type RouterConfig struct {
 	Registry       *service.Registry
 	Approver       approval.Approver  // nil if no Telegram configured
 	Notifier       approval.Notifier  // nil if no notification backend configured
+	Tracer         approval.Tracer    // nil if tracing is off
 	TierOverrides  map[string]string
 	Logger         *audit.Logger // nil if audit logging disabled
 	TimeoutMinutes int
+	// Privileged is set when running as root: every action then requires
+	// approval regardless of tier config, and requests are flagged as root.
+	Privileged bool
 }
 
 // Router dispatches service actions through the approval and audit pipeline.
@@ -88,8 +93,26 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		return nil, &RouterError{Code: "DENIED_BY_POLICY", Message: fmt.Sprintf("action %s denied by policy", actionKey)}
 	}
 
-	// Fetch service instance (needed for enrichment and execution).
+	// Nothing runs as root without a human approving it.
+	if r.config.Privileged {
+		tier = approval.TierApprove
+	}
+
+	// Fetch service instance (needed for validation, enrichment and execution).
 	svc := r.config.Registry.Get(serviceName)
+
+	// Let the service refuse the request before anyone is asked to approve it.
+	if validator, ok := svc.(service.Validator); ok {
+		if err := validator.Validate(actionName, args); err != nil {
+			code := "INVALID_ARGS"
+			var deniedErr *executor.DeniedError
+			if errors.As(err, &deniedErr) {
+				code = "DENIED_BY_POLICY"
+			}
+			r.logAction(actionKey, account, args, "denied", "failure", code)
+			return nil, &RouterError{Code: code, Message: err.Error(), Err: err}
+		}
+	}
 
 	// Enrich details for approval message if the service supports it.
 	details := args
@@ -125,9 +148,10 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 		defer cancel()
 
 		result, err := r.config.Approver.RequestApproval(ctx, approval.ApprovalRequest{
-			Action:  actionKey,
-			Account: account,
-			Details: details,
+			Action:     actionKey,
+			Account:    account,
+			Details:    details,
+			Privileged: r.config.Privileged,
 		})
 		if err != nil {
 			errCode := "APPROVAL_ERROR"
@@ -176,13 +200,63 @@ func (r *Router) Dispatch(serviceName, actionName, account string, args map[stri
 	if tier == approval.TierApprove {
 		status = "approved"
 	}
+	// A command that ran but exited non-zero is not a success in the audit trail.
+	if execResult, ok := svcResult.Data.(*executor.ExecResult); ok && execResult.ExitCode != 0 {
+		r.logAction(actionKey, account, args, status, "failure", "NONZERO_EXIT")
+		return svcResult.Data, nil
+	}
 	r.logAction(actionKey, account, args, status, "success", "")
 
 	return svcResult.Data, nil
 }
 
-// logAction writes an audit log entry if a logger is configured.
+// maxTraceParamLen bounds each parameter value shown in a trace event.
+const maxTraceParamLen = 300
+
+// trace sends a timestamped event to the tracer for every outcome that
+// involved an approval decision or a refusal. Auto-tier actions that succeed
+// are skipped so routine reads do not flood the chat. A tracer failure never
+// affects the action.
+func (r *Router) trace(action, account string, params map[string]string, status, result, errorCode string) {
+	if r.config.Tracer == nil || (status == "auto" && result == "success") {
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("[trace] %s\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC")))
+	b.WriteString(action)
+	if r.config.Privileged {
+		b.WriteString(" (root)")
+	}
+	b.WriteString(fmt.Sprintf(": %s, %s", status, result))
+	if errorCode != "" {
+		b.WriteString(fmt.Sprintf(" (%s)", errorCode))
+	}
+	b.WriteString("\n")
+	if account != "" {
+		b.WriteString(fmt.Sprintf("account: %s\n", account))
+	}
+
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := []rune(params[k])
+		if len(v) > maxTraceParamLen {
+			v = append(v[:maxTraceParamLen], []rune("...")...)
+		}
+		b.WriteString(fmt.Sprintf("%s: %s\n", k, string(v)))
+	}
+
+	r.config.Tracer.SendTrace(strings.TrimRight(b.String(), "\n"))
+}
+
+// logAction writes an audit log entry if a logger is configured, and emits
+// a trace event if tracing is on.
 func (r *Router) logAction(action, account string, params map[string]string, status, result, errorCode string) {
+	r.trace(action, account, params, status, result, errorCode)
 	if r.config.Logger == nil {
 		return
 	}

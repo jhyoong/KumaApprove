@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -175,9 +176,101 @@ func promptSection(reader *bufio.Reader, name string, status sectionStatus, opti
 	return strings.ToLower(answer) == "r"
 }
 
+// invokingUserBotToken returns the Telegram bot token from the config of the
+// user who ran sudo, or "" if there is none.
+func invokingUserBotToken() string {
+	name := os.Getenv("SUDO_USER")
+	if name == "" {
+		return ""
+	}
+	u, err := user.Lookup(name)
+	if err != nil {
+		return ""
+	}
+	return botTokenInHome(u.HomeDir)
+}
+
+// botTokenInHome returns the Telegram bot token from the user-level config
+// under homeDir, or "" if there is none.
+func botTokenInHome(homeDir string) string {
+	cfg, err := config.Load(filepath.Join(homeDir, ".kuma-approve", "config.json"))
+	if err != nil {
+		return ""
+	}
+	return cfg.Telegram.BotToken
+}
+
+// runRoot configures root mode: only Telegram, stored root-only under
+// config.RootDir. Accounts and OAuth stay with the unprivileged user.
+func runRoot(reader *bufio.Reader) {
+	fmt.Println("=== KumaApprove Setup Wizard (root mode) ===")
+	fmt.Println()
+	fmt.Println("Root mode runs approved commands as root. Config: " + config.DefaultPath())
+	fmt.Println("Use a bot token that exists ONLY in this root-owned config. Anything that")
+	fmt.Println("can read the token (e.g. an agent reading ~/.kuma-approve/config.json) could")
+	fmt.Println("send you look-alike approval prompts, so do not reuse your existing bot.")
+	fmt.Println()
+
+	if err := os.MkdirAll(config.Dir(), 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create config directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Chmod(config.Dir(), 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to restrict config directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(config.DefaultPath())
+	if err != nil {
+		cfg = config.Default()
+	}
+
+	if promptSection(reader, "Telegram", validateTelegram(cfg, ""), false) {
+		botToken := readLine(reader, "    Telegram bot token (dedicated to root mode): ")
+		if userToken := invokingUserBotToken(); userToken != "" && botToken == userToken {
+			fmt.Fprintln(os.Stderr, "this token is also in your user config, where non-root processes can read it; create a separate bot for root mode")
+			os.Exit(1)
+		}
+		if err := validateTelegramBot(botToken, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		cfg.Telegram.BotToken = botToken
+
+		chatID := readLine(reader, "    Telegram chat ID (press Enter to auto-detect from a message you sent the bot): ")
+		if chatID == "" {
+			chatID, err = detectChatID(botToken)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to detect chat ID: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("    Detected chat ID: %s\n", chatID)
+		}
+		cfg.Telegram.ChatID = chatID
+
+		if err := config.Save(cfg, config.DefaultPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+			os.Exit(1)
+		}
+		if err := sendTestMessage(botToken, chatID); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to send test message: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("    Telegram configured.")
+	}
+	fmt.Println()
+	fmt.Println("Root mode is ready. Commands run via 'sudo -n kuma-approve exec run --cmd ...'")
+	fmt.Println("always require Telegram approval. Deny list and timeouts: " + config.DefaultPath())
+}
+
 // Run executes the interactive setup wizard.
 func Run() {
 	reader := bufio.NewReader(os.Stdin)
+
+	if config.IsRoot() {
+		runRoot(reader)
+		return
+	}
 
 	fmt.Println("=== KumaApprove Setup Wizard ===")
 	fmt.Println()

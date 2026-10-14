@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -350,5 +351,125 @@ func TestTelegramSendPlainText(t *testing.T) {
 	}
 	if got.Has("parse_mode") {
 		t.Errorf("parse_mode should be unset, got %q", got.Get("parse_mode"))
+	}
+}
+
+func TestFormatPrivilegedApprovalMessage(t *testing.T) {
+	cmd := "cp a_b /etc/x && echo `id` *star* <tag> " + strings.Repeat("y", 600)
+	msg := formatPrivilegedApprovalMessage(ApprovalRequest{
+		RequestID: "abcd1234",
+		Action:    "exec:run",
+		Details:   map[string]string{"cmd": cmd, "shell": "true"},
+	})
+
+	if !strings.Contains(msg, "root") {
+		t.Error("expected the message to say the action runs as root")
+	}
+	if !strings.Contains(msg, "<pre>"+html.EscapeString(cmd)+"</pre>") {
+		t.Errorf("expected the full command, escaped and untruncated, got %s", msg)
+	}
+	if strings.Contains(msg, "<tag>") {
+		t.Error("expected HTML in the command to be escaped")
+	}
+}
+
+func TestTelegramParseModeByPrivilege(t *testing.T) {
+	tests := []struct {
+		name       string
+		privileged bool
+		wantMode   string
+		wantText   string
+	}{
+		{"normal request uses Markdown", false, "Markdown", "Approval Required"},
+		{"root request uses HTML", true, "HTML", "ROOT Approval Required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var parseMode, text string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				if r.URL.Path == "/botsecret/sendMessage" {
+					r.ParseForm()
+					parseMode = r.FormValue("parse_mode")
+					text = r.FormValue("text")
+				}
+				json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 42}})
+			}))
+			defer server.Close()
+
+			tg := NewTelegramApprover(TelegramConfig{
+				BotToken: "secret",
+				ChatID:   "123",
+				BaseURL:  server.URL,
+			})
+			if _, err := tg.sendApprovalMessage(ApprovalRequest{
+				RequestID:  "abcd1234",
+				Action:     "exec:run",
+				Details:    map[string]string{"cmd": "systemctl restart x_y"},
+				Privileged: tt.privileged,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if parseMode != tt.wantMode {
+				t.Errorf("parse_mode = %q, want %q", parseMode, tt.wantMode)
+			}
+			if !strings.Contains(text, tt.wantText) {
+				t.Errorf("expected %q in message, got %s", tt.wantText, text)
+			}
+		})
+	}
+}
+
+func TestTelegramSendTrace(t *testing.T) {
+	var mu sync.Mutex
+	var text, chatID string
+	var hasParseMode bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/botsecret/sendMessage" {
+			r.ParseForm()
+			text = r.FormValue("text")
+			chatID = r.FormValue("chat_id")
+			_, hasParseMode = r.Form["parse_mode"]
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 1}})
+	}))
+	defer server.Close()
+
+	tg := NewTelegramApprover(TelegramConfig{
+		BotToken: "secret",
+		ChatID:   "123",
+		BaseURL:  server.URL,
+	})
+
+	event := "[trace] exec:run: denied\ncmd: rm_a *b* `c`"
+	if err := tg.SendTrace(event); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if text != event || chatID != "123" {
+		t.Errorf("expected the event verbatim to chat 123, got %q to %q", text, chatID)
+	}
+	if hasParseMode {
+		t.Error("traces must be sent without a parse mode")
+	}
+	mu.Unlock()
+
+	if err := tg.SendTrace(strings.Repeat("x", 10000)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len([]rune(text)) > 4096 {
+		t.Errorf("expected an overlong trace to be cut to fit a Telegram message, got %d characters", len([]rune(text)))
 	}
 }

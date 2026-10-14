@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -295,5 +296,28 @@ func TestValidateMicrosoftExpiredToken(t *testing.T) {
 	}
 	if status.valid {
 		t.Fatal("expected invalid")
+	}
+}
+
+func TestBotTokenInHome(t *testing.T) {
+	home := t.TempDir()
+	if got := botTokenInHome(home); got != "" {
+		t.Errorf("expected no token without a config, got %q", got)
+	}
+
+	cfg := config.Default()
+	cfg.Telegram.BotToken = "user-token"
+	if err := config.Save(cfg, filepath.Join(home, ".kuma-approve", "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := botTokenInHome(home); got != "user-token" {
+		t.Errorf("botTokenInHome() = %q, want %q", got, "user-token")
+	}
+}
+
+func TestInvokingUserBotTokenWithoutSudo(t *testing.T) {
+	t.Setenv("SUDO_USER", "")
+	if got := invokingUserBotToken(); got != "" {
+		t.Errorf("expected no token when not run via sudo, got %q", got)
 	}
 }

@@ -66,6 +66,8 @@ The wizard will:
 7. Open a browser for Google Calendar OAuth authorization.
 8. Send a test Telegram message to confirm the bot works.
 
+To let agents run approved commands as root, there is a separate root-mode setup (`sudo kuma-approve setup`); see [Root commands](#root-commands).
+
 ## Usage
 
 ```
@@ -119,12 +121,75 @@ kuma-approve gcal delete --event-id <id>
 ### Command Execution
 
 ```bash
-# Run a command (safe-listed commands auto-approve)
+# Run a command (requires Telegram approval)
 kuma-approve exec run --cmd "df -h"
 
-# Shell mode for pipes and redirects (always requires approval)
+# Shell mode for pipes and redirects
 kuma-approve exec run --cmd "cat log.txt | grep ERROR" --shell true
+
+# Override the default timeout (seconds, max 3600)
+kuma-approve exec run --cmd "make build" --timeout 300
 ```
+
+Every `exec` command requires approval unless you set `exec:run` to `auto` in `approval.tiers`. Only `--cmd`, `--shell` and `--timeout` are accepted; any other flag is rejected with `INVALID_ARGS`.
+
+A command that runs but exits non-zero still returns `success: true` with `data.exit_code` set; the audit log records it as a failure (`NONZERO_EXIT`). Deny-listed commands and bad parameters are rejected before any approval is requested.
+
+### Root commands
+
+`exec` never calls `sudo` itself (`sudo` inside `--cmd` stays deny-listed). To run something as root, run the whole CLI under `sudo`:
+
+```bash
+sudo -n kuma-approve exec run --cmd "systemctl restart cloudflared"
+sudo -n kuma-approve exec run --cmd "cp /home/me/app.yml /etc/app/config.yml && systemctl restart app" --shell true
+```
+
+The approval gate then runs as root, where the calling agent cannot tamper with it. In root mode:
+
+- Config, audit log and bot token live in `/etc/kuma-approve/` (never `$HOME`). The CLI refuses to run unless the config and its directory are root-owned and not accessible to anyone else.
+- Every command requires Telegram approval. Tier overrides and the safe list cannot make a root command auto-run.
+- The approval message is marked as root and shows the complete command, untruncated.
+- Only `exec`, `setup` and `trace` are available.
+
+One-time install:
+
+```bash
+# 1. Install the binary where only root can replace it
+go build -o kuma-approve ./cmd/kuma-approve/
+sudo install -o root -g root -m 0755 kuma-approve /usr/local/bin/kuma-approve
+
+# 2. Configure root mode (Telegram only)
+sudo kuma-approve setup
+
+# 3. Allow passwordless sudo for exactly this command (replace <user>)
+echo '<user> ALL=(root) NOPASSWD: /usr/local/bin/kuma-approve exec run *' | sudo tee /etc/sudoers.d/kuma-approve
+sudo chmod 0440 /etc/sudoers.d/kuma-approve
+sudo visudo -cf /etc/sudoers.d/kuma-approve
+```
+
+Use a **separate Telegram bot** for root mode, with its token stored only in `/etc/kuma-approve/config.json`. A process that can read a bot token can send you messages with working Approve buttons, so a token shared with `~/.kuma-approve/config.json` would let an unprivileged agent disguise a root request. `setup` refuses a token that matches the invoking user's config.
+
+Never grant the sudoers rule to a copy of the binary that a non-root user can write to.
+
+### Traces
+
+Turn on traces to get a timestamped line in the Telegram chat for every request that was approved, rejected, denied by policy, refused for bad arguments, timed out, or failed:
+
+```bash
+kuma-approve trace on       # enable
+kuma-approve trace off      # disable
+kuma-approve trace status   # show the current setting
+```
+
+```
+[trace] 2026-10-08 12:46:08 UTC
+exec:run: denied, failure (DENIED_BY_POLICY)
+cmd: sudo ls /root
+```
+
+Auto-tier actions that succeed (for example `gmail list`) are not traced, so routine reads do not flood the chat; they are still in the audit log. Traces are sent as plain text, with each parameter value cut at 300 characters.
+
+The setting is stored as `approval.trace` in the config. Root mode has its own config and bot, so toggle it separately with `sudo kuma-approve trace on`; root traces are marked `(root)`. That command is not covered by the passwordless sudoers rule, so an agent cannot switch root traces off.
 
 ### Authentication
 
@@ -155,11 +220,11 @@ Every action has a default approval tier that can be overridden in the config fi
 
 | Tier | Behaviour | Examples |
 |---|---|---|
-| **auto** | Executes immediately | Read emails, list calendar events, safe-listed shell commands |
-| **approve** | Blocks until Telegram approval or timeout | Send email, create/modify/delete events, non-safe-listed commands |
-| **deny** | Rejected outright | Commands matching deny-list patterns (`sudo`, `rm -rf`, etc.) |
+| **auto** | Executes immediately | Read emails, list calendar events |
+| **approve** | Blocks until Telegram approval or timeout | Send email, create/modify/delete events, shell commands |
+| **deny** | Rejected outright, before any approval is requested | Commands matching deny-list patterns (`sudo`, `rm -rf`, etc.) |
 
-Using `--shell true` automatically bumps any command to the "approve" tier.
+When run as root, every action is forced to the "approve" tier (or denied); nothing can be `auto`. See [Root commands](#root-commands).
 
 ## Output Format
 
@@ -188,7 +253,7 @@ Errors:
 }
 ```
 
-Error codes: `APPROVAL_REJECTED`, `APPROVAL_TIMEOUT`, `AUTH_EXPIRED`, `DENIED_BY_POLICY`, `EXECUTION_TIMEOUT`, `API_ERROR`, `INVALID_ARGS`.
+Error codes: `APPROVAL_REJECTED`, `APPROVAL_TIMEOUT`, `AUTH_EXPIRED`, `DENIED_BY_POLICY`, `EXECUTION_TIMEOUT`, `API_ERROR`, `INVALID_ARGS`, `NO_APPROVER`, `CONFIG_ERROR`, `ROOT_EXEC_ONLY`.
 
 ## Configuration
 
@@ -202,6 +267,7 @@ Config file: `~/.kuma-approve/config.json`
   },
   "approval": {
     "timeout_minutes": 240,
+    "trace": false,
     "tiers": {
       "gmail:list": "auto",
       "gmail:get": "auto",
@@ -243,7 +309,9 @@ Config file: `~/.kuma-approve/config.json`
 
 `microsoft_oauth` and the `outlook`/`msft-cal` account entries are optional. Omit them (or leave `microsoft_oauth.client_id` empty) and the Outlook/Calendar services are not registered, so `kuma-approve outlook ...` fails with `unknown service`. `tenant_id` defaults to `consumers` (personal Microsoft accounts); use `common` or a specific tenant GUID for work/school accounts.
 
-Override any action's tier in the `tiers` map. Add commands to `safe_list` to auto-approve them, or add regex patterns to `deny_list_patterns` to block them entirely.
+Override any action's tier in the `tiers` map. Add regex patterns to `deny_list_patterns` to block commands entirely. `safe_list` is not currently applied: listing a command there does not make it auto-approve.
+
+Root mode has its own config at `/etc/kuma-approve/config.json`, written by `sudo kuma-approve setup`. It uses the same format, but only `telegram`, `approval.timeout_minutes` and `exec` are used, the working directory defaults to `/root`, and `approval.tiers` cannot make a command skip approval.
 
 ## Docker / Container Usage
 
@@ -324,4 +392,4 @@ The `[AUTH_RELAY]` prefix on stderr is a stable tag that AI agents can detect an
 
 ## Audit Log
 
-Every CLI invocation is logged to `~/.kuma-approve/audit.log` as newline-delimited JSON. Each entry records the timestamp, action, account, parameters (sanitised), approval status, result, and error code. Email bodies are truncated to 200 characters in the log.
+Every CLI invocation is logged to `~/.kuma-approve/audit.log` (`/etc/kuma-approve/audit.log` in root mode) as newline-delimited JSON. Each entry records the timestamp, action, account, parameters (sanitised), approval status, result, and error code. Email bodies are truncated to 200 characters in the log.

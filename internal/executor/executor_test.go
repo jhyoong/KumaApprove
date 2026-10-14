@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -241,5 +242,79 @@ func TestName(t *testing.T) {
 	}
 	if svc.Name() != "exec" {
 		t.Errorf("expected name 'exec', got %q", svc.Name())
+	}
+}
+
+func TestValidateDeniedBeforeExecution(t *testing.T) {
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = svc.Validate("run", map[string]string{"cmd": "sudo apt-get install something"})
+	var denied *DeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected *DeniedError, got %T: %v", err, err)
+	}
+}
+
+func TestValidateUnknownParam(t *testing.T) {
+	svc, err := New(ExecConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = svc.Validate("run", map[string]string{"cmd": "echo hi", "help": "true"})
+	if err == nil || !strings.Contains(err.Error(), "--help") {
+		t.Fatalf("expected unknown parameter error naming --help, got %v", err)
+	}
+}
+
+func TestTimeoutParam(t *testing.T) {
+	svc, err := New(ExecConfig{TimeoutSeconds: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.Execute("run", map[string]string{"cmd": "sleep 10", "timeout": "1"})
+	var timeoutErr *TimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected *TimeoutError, got %T: %v", err, err)
+	}
+	if timeoutErr.TimeoutSeconds != 1 {
+		t.Errorf("expected timeout of 1s to be reported, got %d", timeoutErr.TimeoutSeconds)
+	}
+
+	for _, bad := range []string{"0", "-5", "abc", "999999"} {
+		if err := svc.Validate("run", map[string]string{"cmd": "echo hi", "timeout": bad}); err == nil {
+			t.Errorf("expected timeout %q to be rejected", bad)
+		}
+	}
+}
+
+func TestPrivilegedEnvironment(t *testing.T) {
+	svc, err := New(ExecConfig{Privileged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Execute("run", map[string]string{"cmd": "env"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stdout := result.Data.(*ExecResult).Stdout
+	if !strings.Contains(stdout, "HOME=/root") {
+		t.Errorf("expected HOME=/root, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "/usr/sbin") {
+		t.Errorf("expected sbin directories on PATH, got %q", stdout)
+	}
+}
+
+func TestPrivilegedRejectsOverlongCommand(t *testing.T) {
+	svc, err := New(ExecConfig{Privileged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := "echo " + strings.Repeat("a", maxPrivilegedCmdLen)
+	if err := svc.Validate("run", map[string]string{"cmd": long}); err == nil {
+		t.Fatal("expected overlong root command to be rejected")
 	}
 }
