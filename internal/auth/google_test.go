@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -532,6 +533,88 @@ func TestRunRelayFlowSuccess(t *testing.T) {
 	cred, _ := store.Get("gmail:test@gmail.com")
 	if cred.RefreshToken != "relay-refresh-token" {
 		t.Fatal("store should have the refresh token from relay flow")
+	}
+}
+
+func TestRunRelayFlowNotifiesURL(t *testing.T) {
+	relayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "complete", "code": "relay-auth-code"})
+	}))
+	defer relayServer.Close()
+
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "relay-access-token",
+			"refresh_token": "relay-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	var sent []string
+	provider := &GoogleAuth{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		RelayURL:     relayServer.URL,
+		TokenURL:     tokenServer.URL,
+		Store:        newFakeStore(),
+		Notify: func(text string) error {
+			sent = append(sent, text)
+			return errors.New("telegram down")
+		},
+	}
+
+	// A Notify failure must not abort the flow.
+	if err := provider.RunRelayFlow("gmail", "test@gmail.com"); err != nil {
+		t.Fatalf("relay flow failed: %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(sent))
+	}
+	for _, want := range []string{"response_type=code", "redirect_uri=" + url.QueryEscape(relayServer.URL+"/callback"), "state="} {
+		if !strings.Contains(sent[0], want) {
+			t.Errorf("notification missing %q: %s", want, sent[0])
+		}
+	}
+}
+
+func TestReAuthRelayFailureSkipsBrowserOAuth(t *testing.T) {
+	relayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "complete", "code": "bad-code"})
+	}))
+	defer relayServer.Close()
+
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant", "error_description": "Bad code"})
+	}))
+	defer tokenServer.Close()
+
+	// Occupy the callback port so a browser OAuth fallback would fail with a
+	// different, recognisable error instead of blocking for 5 minutes.
+	blocker, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	os.Setenv("KUMA_OAUTH_PORT", strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port))
+	defer os.Unsetenv("KUMA_OAUTH_PORT")
+
+	provider := &GoogleAuth{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		RelayURL:     relayServer.URL,
+		TokenURL:     tokenServer.URL,
+		Store:        newFakeStore(),
+	}
+
+	_, err = provider.reAuth("gmail", "test@gmail.com")
+	if err == nil {
+		t.Fatal("expected relay failure to be returned")
+	}
+	if !strings.Contains(err.Error(), "exchanging relay code") {
+		t.Fatalf("expected relay error without browser fallback, got: %v", err)
 	}
 }
 
