@@ -259,16 +259,6 @@ func (t *TelegramApprover) apiCallRaw(method string, params url.Values) ([]byte,
 	return raw, nil
 }
 
-// SendMessage sends a plain text notification via Telegram (e.g. for AUTH_EXPIRED alerts).
-func (t *TelegramApprover) SendMessage(text string) error {
-	_, err := t.apiCall("sendMessage", url.Values{
-		"chat_id":    {t.config.ChatID},
-		"text":       {text},
-		"parse_mode": {"Markdown"},
-	})
-	return err
-}
-
 // maxTraceLen keeps a message within Telegram's 4096-character limit.
 const maxTraceLen = 4000
 

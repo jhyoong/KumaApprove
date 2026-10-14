@@ -11,6 +11,7 @@ import (
 
 	"github.com/jhyoong/KumaApprove/internal/approval"
 	"github.com/jhyoong/KumaApprove/internal/audit"
+	"github.com/jhyoong/KumaApprove/internal/auth"
 	"github.com/jhyoong/KumaApprove/internal/executor"
 	"github.com/jhyoong/KumaApprove/internal/service"
 )
@@ -22,7 +23,7 @@ type fakeService struct {
 	args    map[string]string
 }
 
-func (f *fakeService) Name() string                    { return f.name }
+func (f *fakeService) Name() string                        { return f.name }
 func (f *fakeService) Actions() []service.ActionDefinition { return f.actions }
 func (f *fakeService) Execute(action string, args map[string]string) (*service.Result, error) {
 	f.called = action
@@ -884,5 +885,34 @@ func TestRouterTraceFailureDoesNotAffectAction(t *testing.T) {
 	}
 	if svc.called != "run" {
 		t.Fatal("expected the action to run")
+	}
+}
+
+type authExpiredService struct{ fakeService }
+
+func (a *authExpiredService) Execute(string, map[string]string) (*service.Result, error) {
+	return nil, &auth.AuthExpiredError{Service: "gmail", Account: "first_last@example.com", Err: errors.New("invalid_grant")}
+}
+
+func TestRouterAuthExpiredNotifiesPlainText(t *testing.T) {
+	reg := service.NewRegistry()
+	reg.Register(&authExpiredService{fakeService{
+		name:    "gmail",
+		actions: []service.ActionDefinition{{Name: "list", DefaultTier: "auto"}},
+	}})
+	notifier := &recordingTracer{}
+
+	r := NewRouter(RouterConfig{Registry: reg, Notifier: notifier})
+	_, err := r.Dispatch("gmail", "list", "first_last@example.com", map[string]string{})
+
+	var re *RouterError
+	if !errors.As(err, &re) || re.Code != "AUTH_EXPIRED" {
+		t.Fatalf("expected AUTH_EXPIRED, got %v", err)
+	}
+	if len(notifier.events) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(notifier.events))
+	}
+	if want := "kuma-approve auth gmail first_last@example.com"; !strings.Contains(notifier.events[0], want) {
+		t.Errorf("alert %q missing %q", notifier.events[0], want)
 	}
 }

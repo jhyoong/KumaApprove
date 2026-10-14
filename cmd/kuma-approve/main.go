@@ -234,15 +234,10 @@ func main() {
 	}
 
 	// Register executor service.
-	execSafeList := make(map[string]string, len(cfg.Exec.SafeList))
-	for _, cmd := range cfg.Exec.SafeList {
-		execSafeList[cmd] = approval.TierAuto
-	}
 	execSvc, err := executor.New(executor.ExecConfig{
 		WorkingDirectory: cfg.Exec.WorkingDirectory,
 		TimeoutSeconds:   cfg.Exec.TimeoutSeconds,
 		MaxOutputBytes:   cfg.Exec.MaxOutputBytes,
-		SafeList:         execSafeList,
 		DenyListPatterns: cfg.Exec.DenyListPatterns,
 		Privileged:       config.IsRoot(),
 	})
@@ -258,7 +253,7 @@ func main() {
 
 	// Create Telegram approver if configured.
 	var approver approval.Approver
-	var notifier approval.Notifier
+	var notifier approval.Tracer
 	var tracer approval.Tracer
 	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 		tg := approval.NewTelegramApprover(approval.TelegramConfig{

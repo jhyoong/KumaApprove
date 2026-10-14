@@ -46,12 +46,11 @@ func (e *AuthExpiredError) Unwrap() error {
 // GoogleAuth handles Google OAuth2 token retrieval, refresh, and the
 // interactive browser-based authorization flow.
 type GoogleAuth struct {
-	ClientID      string
-	ClientSecret  string
-	TokenURL      string
-	DeviceCodeURL string
-	RelayURL      string
-	Store         CredentialStore
+	ClientID     string
+	ClientSecret string
+	TokenURL     string
+	RelayURL     string
+	Store        CredentialStore
 	// Notify, if set, receives the relay authorization URL so it reaches the
 	// user intact (e.g. a plain-text Telegram message) instead of depending on
 	// an agent to copy it out of stderr. A Notify failure never aborts the flow.
@@ -139,148 +138,6 @@ func (g *GoogleAuth) refreshToken(refreshToken string) (string, string, error) {
 	return result.AccessToken, expiry, nil
 }
 
-// deviceFlowServices lists services whose scopes Google allows in the
-// device-authorization flow (RFC 8628). Gmail scopes are prohibited
-// by Google in device flow — Gmail re-auth requires the browser-based
-// OAuth flow.
-var deviceFlowServices = map[string]bool{
-	"gcal": true,
-}
-
-type deviceCodeResponse struct {
-	DeviceCode      string `json:"device_code"`
-	UserCode        string `json:"user_code"`
-	VerificationURL string `json:"verification_url"`
-	ExpiresIn       int    `json:"expires_in"`
-	Interval        int    `json:"interval"`
-	Error           string `json:"error"`
-	ErrorDesc       string `json:"error_description"`
-}
-
-func (g *GoogleAuth) requestDeviceCode(service string) (deviceCodeResponse, error) {
-	scopes, ok := defaultScopes[service]
-	if !ok {
-		return deviceCodeResponse{}, fmt.Errorf("unknown service: %s", service)
-	}
-
-	deviceCodeURL := g.DeviceCodeURL
-	if deviceCodeURL == "" {
-		deviceCodeURL = "https://oauth2.googleapis.com/device/code"
-	}
-
-	params := url.Values{
-		"client_id": {g.ClientID},
-		"scope":     {strings.Join(scopes, " ")},
-	}
-
-	resp, err := http.PostForm(deviceCodeURL, params)
-	if err != nil {
-		return deviceCodeResponse{}, err
-	}
-	defer resp.Body.Close()
-
-	var result deviceCodeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return deviceCodeResponse{}, err
-	}
-	if result.Error != "" {
-		return deviceCodeResponse{}, fmt.Errorf("device code request: %s: %s", result.Error, result.ErrorDesc)
-	}
-
-	return result, nil
-}
-
-func (g *GoogleAuth) pollDeviceToken(deviceCode string, interval, expiresIn int) (string, string, string, error) {
-	tokenURL := g.TokenURL
-	if tokenURL == "" {
-		tokenURL = "https://oauth2.googleapis.com/token"
-	}
-
-	if interval < 1 {
-		interval = 5
-	}
-
-	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
-
-	for {
-		if time.Now().After(deadline) {
-			return "", "", "", fmt.Errorf("device flow timed out")
-		}
-
-		time.Sleep(time.Duration(interval) * time.Second)
-
-		params := url.Values{
-			"client_id":     {g.ClientID},
-			"client_secret": {g.ClientSecret},
-			"device_code":   {deviceCode},
-			"grant_type":    {"urn:ietf:params:oauth:grant-type:device_code"},
-		}
-
-		resp, err := http.PostForm(tokenURL, params)
-		if err != nil {
-			return "", "", "", err
-		}
-
-		var result struct {
-			AccessToken  string `json:"access_token"`
-			RefreshToken string `json:"refresh_token"`
-			ExpiresIn    int    `json:"expires_in"`
-			Error        string `json:"error"`
-		}
-		json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
-
-		switch result.Error {
-		case "":
-			expiry := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second).Format(time.RFC3339)
-			return result.AccessToken, result.RefreshToken, expiry, nil
-		case "authorization_pending":
-			continue
-		case "slow_down":
-			interval += 5
-			continue
-		case "access_denied":
-			return "", "", "", fmt.Errorf("user denied access")
-		default:
-			return "", "", "", fmt.Errorf("device flow error: %s", result.Error)
-		}
-	}
-}
-
-func (g *GoogleAuth) runDeviceFlow(service, account string) (string, error) {
-	if !deviceFlowServices[service] {
-		return "", fmt.Errorf("device flow not supported for %s (scopes prohibited by Google); re-run: kuma-approve auth %s %s", service, service, account)
-	}
-
-	resp, err := g.requestDeviceCode(service)
-	if err != nil {
-		return "", err
-	}
-	if resp.DeviceCode == "" {
-		return "", fmt.Errorf("empty device code in response")
-	}
-
-	fmt.Fprintf(os.Stderr, "[AUTH_DEVICE_FLOW] Verification URL: %s\n", resp.VerificationURL)
-	fmt.Fprintf(os.Stderr, "[AUTH_DEVICE_FLOW] User Code: %s\n", resp.UserCode)
-	fmt.Fprintf(os.Stderr, "[AUTH_DEVICE_FLOW] Waiting for approval (expires in %ds)...\n", resp.ExpiresIn)
-
-	token, refresh, expiry, err := g.pollDeviceToken(resp.DeviceCode, resp.Interval, resp.ExpiresIn)
-	if err != nil {
-		return "", err
-	}
-
-	key := service + ":" + account
-	if err := g.Store.Put(key, credstore.Credential{
-		AccessToken:  token,
-		RefreshToken: refresh,
-		Expiry:       expiry,
-	}); err != nil {
-		return "", fmt.Errorf("saving device flow token: %w", err)
-	}
-
-	return token, nil
-}
-
 // RunRelayFlow authorizes the given service and account through the OAuth
 // relay, so the consent URL can be opened on any device. It requires RelayURL.
 func (g *GoogleAuth) RunRelayFlow(service, account string) error {
@@ -366,14 +223,6 @@ func (g *GoogleAuth) runRelayFlow(service, account string) (string, error) {
 }
 
 func (g *GoogleAuth) reAuth(service, account string) (string, error) {
-	if deviceFlowServices[service] {
-		token, err := g.runDeviceFlow(service, account)
-		if err == nil {
-			return token, nil
-		}
-		fmt.Fprintf(os.Stderr, "[AUTH] Device flow failed: %v\n", err)
-	}
-
 	if g.RelayURL != "" {
 		// No local browser fallback: with a relay configured the host is
 		// assumed headless, and a 127.0.0.1 callback would be a dead end.

@@ -15,19 +15,20 @@ No lint/formatter config — keep `gofmt`-clean and match surrounding code. Do n
 
 ## Entrypoint and dispatch
 
-- `cmd/kuma-approve/main.go` is the only entrypoint. Flag parsing is hand-rolled: `--key value` pairs, bare `--flag` means `"true"`. There is no cobra/flag library — keep it that way.
-- Dispatch shape: `kuma-approve setup | auth <service> <account> | trace on|off|status | <service> <action> [flags]`. `setup`/`auth` bypass the registry and call `internal/setup` directly; `trace` flips `approval.trace` in the config.
-- Services registered in `main.go`: `gmail`, `gcal` (both need `--account` resolution), `exec` (no account). `resolveAccount` strips `--account` before `Execute()` — service code never sees it. Single configured account is optional; multiple accounts without `--account` is a `NO_ACCOUNT` error.
+- `cmd/kuma-approve/main.go` is the CLI entrypoint (`cmd/kuma-relay` is a separate tiny OAuth relay server over `internal/relay`). Flag parsing is hand-rolled: `--key value` pairs, bare `--flag` means `"true"`. There is no cobra/flag library — keep it that way.
+- Dispatch shape: `kuma-approve setup | auth <service> <account> | trace on|off|status | <service> <action> [flags]`. `setup` and `auth` bypass the registry (`setup` calls `internal/setup`; `auth` is `runAuth` in `main.go`); `trace` flips `approval.trace` in the config.
+- Services registered in `main.go`: `gmail`, `gcal`, and `outlook`/`msft-cal` when Microsoft OAuth is configured (all need `--account` resolution), plus `exec` (no account). `resolveAccount` strips `--account` before `Execute()` — service code never sees it. Single configured account is optional; multiple accounts without `--account` is a `NO_ACCOUNT` error.
 
 ## Architecture (`internal/`)
 
-`config` → `credstore` → `auth` → `service/{gmail,gcal}` + `executor` → `approval` → `cli/router` → `output`, with `audit` + `setup` on the side.
+`config` → `credstore` → `auth` → `service/{gmail,gcal,outlook,msft-cal}` + `executor` → `approval` → `cli/router` → `output`, with `audit` + `setup` on the side.
 
 - New service = new package under `internal/service/` implementing `service.Service` (`Name`/`Actions`/`Execute` in `internal/service/types.go`) + one `registry.Register()` call in `main.go`. Nothing else changes.
 - `cli/router.go` owns the pipeline: tier resolve → Telegram approval → `Execute()` → audit log. Error-code mapping lives there (`AUTH_EXPIRED`, `EXECUTION_TIMEOUT`, else `API_ERROR`). An exec command that exits non-zero still returns its result, but is audited as a `NONZERO_EXIT` failure.
-- Approval tiers (`internal/approval/tier.go`): `auto` / `approve` / `deny`. Defaults in `internal/config/config.go`; user overrides in `~/.kuma-approve/config.json` under `approval.tiers` keyed as `"service:action"`. `exec:run` is `approve` for every command; the executor's safe list (`GetTier`/`GetTierWithShell`) is not wired into the router, so do not assume safe-listed commands auto-run. Deny-list regex matches reject outright with no approval path.
+- Approval tiers (`internal/approval/tier.go`): `auto` / `approve` / `deny`. Defaults in `internal/config/config.go`; user overrides in `~/.kuma-approve/config.json` under `approval.tiers` keyed as `"service:action"`. `exec:run` is `approve` for every command; the `exec.safe_list` config key is not applied anywhere, so do not assume safe-listed commands auto-run. Deny-list regex matches reject outright with no approval path.
 - Executor (`internal/executor/`): direct `exec.Command(binary, args...)` by default; `--shell` switches to `sh -c`. Env is stripped to a minimal set, working dir defaults to `~/.kuma-approve/workspace`, timeout default 60s (`--timeout` overrides, max 3600), stdout/stderr truncated at `max_output_bytes`.
 - Pre-approval checks: a service may implement `service.Validator`; the router calls it before the approval gate. `exec` uses it for the deny list (`DENIED_BY_POLICY`) and parameter checks (`INVALID_ARGS`), so nobody is asked to approve a request that would be refused.
+- Google re-auth (`internal/auth/google.go`): when refresh fails, `reAuth` uses the relay flow if `relay_url` is set (URL printed with `[AUTH_RELAY]` and sent to Telegram via `GoogleAuth.Notify`), otherwise the local browser flow. There is no device flow and no local fallback once a relay is configured.
 - Root mode (`config.IsRoot()`, i.e. `sudo kuma-approve exec run ...`): this is the only path to root; `exec` never invokes `sudo`. State lives in fixed `/etc/kuma-approve/` and `config.VerifyRootOwned` must pass before the config is loaded. `RouterConfig.Privileged` forces the `approve` tier for everything and flags the Telegram message. Only `exec`, `setup` and `trace` run as root. Never derive a root-mode path from `$HOME` or other caller-controlled input, and never add a way for a root action to skip approval.
 
 ## Contracts to preserve
@@ -41,4 +42,4 @@ No lint/formatter config — keep `gofmt`-clean and match surrounding code. Do n
 ## Conventions
 
 - Tests are colocated `*_test.go`, hermetic (Google/Telegram mocked) — `go test ./...` needs no credentials or network.
-- `docs/plans/` and `docs/PLAN.md` are historical build notes; `README.md` is the user-facing contract. Trust `main.go` / `router.go` / `config.go` over prose when they conflict.
+- `docs/plans/` holds historical build notes (some describe removed features, e.g. the Google device flow); `README.md` is the user-facing contract. Trust `main.go` / `router.go` / `config.go` over prose when they conflict.

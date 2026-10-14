@@ -7,9 +7,9 @@ import (
 )
 
 type Envelope struct {
-	Success bool      `json:"success"`
-	Action  string    `json:"action"`
-	Data    any       `json:"data"`
+	Success bool       `json:"success"`
+	Action  string     `json:"action"`
+	Data    any        `json:"data"`
 	Error   *ErrorInfo `json:"error"`
 }
 

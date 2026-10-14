@@ -225,10 +225,10 @@ func TestMicrosoftRefreshToken(t *testing.T) {
 	})
 
 	provider := &MicrosoftAuth{
-		ClientID:     "ms-client-id",
-		TenantID:     "consumers",
-		TokenURL:     server.URL,
-		Store:        store,
+		ClientID: "ms-client-id",
+		TenantID: "consumers",
+		TokenURL: server.URL,
+		Store:    store,
 	}
 
 	token, err := provider.GetToken("outlook", "test@outlook.com")
@@ -276,10 +276,10 @@ func TestMicrosoftRefreshFailure(t *testing.T) {
 	})
 
 	provider := &MicrosoftAuth{
-		ClientID:     "ms-client-id",
-		TenantID:     "consumers",
-		TokenURL:     server.URL,
-		Store:        store,
+		ClientID: "ms-client-id",
+		TenantID: "consumers",
+		TokenURL: server.URL,
+		Store:    store,
 	}
 
 	_, err := provider.GetToken("outlook", "test@outlook.com")
